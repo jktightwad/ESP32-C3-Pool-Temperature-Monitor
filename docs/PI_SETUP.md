@@ -72,5 +72,62 @@ arrive on `pool/temp`.
 
 ## 3. Logger + web page
 
-Not written yet: Python subscriber → SQLite → Flask + Chart.js page, run by
-systemd.
+`pi/app.py` is one service that does both: it subscribes to `pool/temp`,
+stores every reading in SQLite (`pi/pool.db`, timestamped by the Pi's clock),
+and serves the page on port 8080. Chart.js is bundled in `pi/static/`, so the
+page works without internet access.
+
+Install the Python packages from Raspbian's repository (no pip needed):
+
+```bash
+sudo apt install -y python3-flask python3-paho-mqtt git
+```
+
+Get the code onto the Pi. If the GitHub repo is public:
+
+```bash
+cd ~
+git clone https://github.com/jktightwad/ESP32-C3-Pool-Temperature-Monitor.git
+```
+
+If it's private, `git clone` asks for a username and a GitHub personal access
+token (not your password). Alternatively, copy just the `pi/` folder over
+from your PC: `scp -r pi pi@piserver:~/ESP32-C3-Pool-Temperature-Monitor/`
+(create that folder on the Pi first).
+
+Settings file (holds the MQTT password, so only root can read it):
+
+```bash
+sudo cp ~/ESP32-C3-Pool-Temperature-Monitor/pi/pool-monitor.env.example /etc/pool-monitor.env
+sudo nano /etc/pool-monitor.env        # set MQTT_PASSWORD
+sudo chmod 600 /etc/pool-monitor.env
+```
+
+Install as a service so it starts at boot and restarts if it crashes. The
+unit assumes user `pi` and the repo at `/home/pi/ESP32-C3-Pool-Temperature-Monitor`;
+edit `User=` / `WorkingDirectory=` in the file first if yours differ:
+
+```bash
+sudo cp ~/ESP32-C3-Pool-Temperature-Monitor/pi/pool-monitor.service /etc/systemd/system/
+sudo systemctl daemon-reload
+sudo systemctl enable --now pool-monitor
+sudo systemctl status pool-monitor --no-pager
+journalctl -u pool-monitor -f          # live log, Ctrl+C to stop
+```
+
+The log should show `MQTT connected ... subscribing to pool/temp`, then a
+`Stored {...}` line for each reading. Open `http://piserver:8080` (or
+`http://<pi-ip>:8080`) in a browser.
+
+Updating later: `cd ~/ESP32-C3-Pool-Temperature-Monitor && git pull`, then
+`sudo systemctl restart pool-monitor`.
+
+### What the page shows
+
+- Current surface / mid / bottom temperature (°F) and WiFi signal
+- Status line: green when the last reading is recent; yellow if a probe is
+  missing or uncalibrated; red if nothing has arrived for `STALE_MINUTES`
+  (default 30; set it to a few times the report interval)
+- Temperature and signal history for 24 h / 7 days / 30 days; lines break
+  where readings are missing instead of joining across the gap
+- A table view of the most recent readings

@@ -1,0 +1,17 @@
+[Unit]
+Description=Pool temperature logger and web page
+After=network-online.target mosquitto.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=pi
+# Edit this path if the repo is cloned somewhere else
+WorkingDirectory=/home/pi/ESP32-C3-Pool-Temperature-Monitor/pi
+EnvironmentFile=/etc/pool-monitor.env
+ExecStart=/usr/bin/python3 app.py
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
