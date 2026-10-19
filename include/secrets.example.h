@@ -4,3 +4,9 @@
 
 #define WIFI_SSID     "your-ssid"
 #define WIFI_PASSWORD "your-password"
+
+// Mosquitto broker on the Pi (see docs/PI_SETUP.md)
+#define MQTT_HOST     "192.168.1.x"   // Pi's IP address
+#define MQTT_PORT     1883
+#define MQTT_USER     "pool"
+#define MQTT_PASSWORD "your-mqtt-password"

@@ -13,7 +13,8 @@ bar's `env:` selector):
 
 | Env | Source | Purpose |
 |-----|--------|---------|
-| `probe_test` (default) | `src/probe_test/` | Lists DS18B20 ROM addresses, reads all probes every 3 s; used for ice-bath calibration |
+| `monitor` (default) | `src/monitor/` | Production firmware: reads probes, publishes JSON to MQTT `pool/temp`, sleeps |
+| `probe_test` | `src/probe_test/` | Lists DS18B20 ROM addresses, reads all probes every 3 s; used for ice-bath calibration |
 | `wifi_test` | `src/wifi_test/` | WiFi connect time / RSSI / BSSID, deep-sleep cycle |
 
 ## Getting started (VS Code + PlatformIO)
@@ -22,7 +23,7 @@ bar's `env:` selector):
 2. Clone this repo: `Ctrl+Shift+P` → **Git: Clone** → paste the repo URL.
    Open the folder; PlatformIO detects `platformio.ini`.
 3. Copy `include/secrets.example.h` to `include/secrets.h` and fill in your WiFi
-   credentials. `secrets.h` is git-ignored. (Only `wifi_test` needs it so far.)
+   and MQTT settings. `secrets.h` is git-ignored. Pi/broker setup: [docs/PI_SETUP.md](docs/PI_SETUP.md).
 4. Build (✓ in the status bar), then Upload (→). If the upload doesn't start,
    hold **BOOT**, tap **RESET**, release **BOOT**, and upload again.
 5. Open the Serial Monitor (plug icon). With `DEBUG_NO_DEEP_SLEEP 1` (the
