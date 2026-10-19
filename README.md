@@ -24,9 +24,12 @@ bar's `env:` selector):
    Open the folder; PlatformIO detects `platformio.ini`.
 3. Copy `include/secrets.example.h` to `include/secrets.h` and fill in your WiFi
    and MQTT settings. `secrets.h` is git-ignored. Pi/broker setup: [docs/PI_SETUP.md](docs/PI_SETUP.md).
-4. Build (✓ in the status bar), then Upload (→). If the upload doesn't start,
+4. Pick which sketch to build: click the `env:` item in the bottom status bar
+   (e.g. `Default (...)` or `env:monitor`) and choose the environment from the
+   list at the top of the window. Build/Upload then use that environment.
+5. Build (✓ in the status bar), then Upload (→). If the upload doesn't start,
    hold **BOOT**, tap **RESET**, release **BOOT**, and upload again.
-5. Open the Serial Monitor (plug icon). With `DEBUG_NO_DEEP_SLEEP 1` (the
+6. Open the Serial Monitor (plug icon). With `DEBUG_NO_DEEP_SLEEP 1` (the
    default) the board stays awake between cycles so serial stays connected.
    With `0` it really deep sleeps and USB drops every cycle, so output is
    mostly unreadable -- use that mode for battery/current tests only.

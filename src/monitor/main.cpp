@@ -21,7 +21,7 @@
 #define DEBUG_NO_DEEP_SLEEP 1
 
 static const uint32_t REPORT_INTERVAL_S = 600;  // 10 min; lower it for testing
-static const uint32_t WIFI_TIMEOUT_MS   = 10000;
+static const uint32_t WIFI_ATTEMPT_MS   = 8000;   // per attempt, 2 attempts
 static const char    *MQTT_TOPIC        = "pool/temp";
 static const char    *MQTT_CLIENT_ID    = "pool-monitor";
 
@@ -30,17 +30,29 @@ RTC_DATA_ATTR uint32_t bootCount = 0;
 WiFiClient wifiClient;
 PubSubClient mqtt(wifiClient);
 
+// Occasional connect attempts fail outright (seen on the first connect after
+// boot and on a reconnect in debug mode; cause unknown), so if the first
+// attempt times out, reset the radio and try once more.
 static bool connectWiFi() {
-  WiFi.mode(WIFI_STA);
-  WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
-  uint32_t start = millis();
-  while (WiFi.status() != WL_CONNECTED && millis() - start < WIFI_TIMEOUT_MS) {
-    delay(10);
+  for (uint8_t attempt = 1; attempt <= 2; attempt++) {
+    WiFi.mode(WIFI_STA);
+    WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
+    uint32_t start = millis();
+    while (WiFi.status() != WL_CONNECTED && millis() - start < WIFI_ATTEMPT_MS) {
+      delay(10);
+    }
+    if (WiFi.status() == WL_CONNECTED) {
+      Serial.printf("WiFi connected after %lu ms (attempt %u)\n",
+                    (unsigned long)(millis() - start), attempt);
+      return true;
+    }
+    Serial.printf("WiFi attempt %u FAILED after %lu ms (status %d)\n", attempt,
+                  (unsigned long)(millis() - start), (int)WiFi.status());
+    WiFi.disconnect(true);
+    WiFi.mode(WIFI_OFF);
+    delay(100);
   }
-  bool ok = WiFi.status() == WL_CONNECTED;
-  Serial.printf("WiFi %s after %lu ms\n", ok ? "connected" : "FAILED",
-                (unsigned long)(millis() - start));
-  return ok;
+  return false;
 }
 
 // Appends ,"<key>_f":value (or null) to the JSON buffer, converting C to F.
@@ -54,6 +66,7 @@ static size_t appendTemp(char *buf, size_t len, size_t pos, const char *key, flo
 }
 
 static void runCycle() {
+  uint32_t cycleStart = millis();
   bootCount++;
   Serial.printf("\nCycle %lu\n", (unsigned long)bootCount);
 
@@ -85,7 +98,7 @@ static void runCycle() {
   snprintf(payload + pos, sizeof(payload) - pos,
            ",\"uncal\":%u,\"rssi\":%d,\"boot\":%lu,\"awake_ms\":%lu}",
            uncal, wifiOk ? WiFi.RSSI() : 0, (unsigned long)bootCount,
-           (unsigned long)millis());
+           (unsigned long)(millis() - cycleStart));
   Serial.println(payload);
 
   if (wifiOk) {
