@@ -20,8 +20,10 @@ time, RSSI, channel and BSSID, then deep sleeps for 20 s and repeats.
    credentials. `secrets.h` is git-ignored.
 4. Build (✓ in the status bar), then Upload (→). If the upload doesn't start,
    hold **BOOT**, tap **RESET**, release **BOOT**, and upload again.
-5. Open the Serial Monitor (plug icon). The board drops off USB during deep
-   sleep and comes back on each wake, so expect gaps or reconnects.
+5. Open the Serial Monitor (plug icon). With `DEBUG_NO_DEEP_SLEEP 1` (the
+   default) the board stays awake between cycles so serial stays connected.
+   With `0` it really deep sleeps and USB drops every cycle, so output is
+   mostly unreadable -- use that mode for battery/current tests only.
 
 ## Pin map (ESP32-C3 SuperMini)
 
@@ -38,7 +40,7 @@ Avoid GPIO 2, 8 and 9 (strapping pins) for external circuits.
 
 1. **WiFi:** run the sketch at the pool edge. Record connect time and RSSI over
    several cycles, and note any failures.
-2. **Sleep current:** set `USE_LED 0`, run from the battery only
+2. **Sleep current:** set `DEBUG_NO_DEEP_SLEEP 0` and `USE_LED 0`, run from the battery only
    (LiPo+ → meter on mA range → 5V pin) with USB disconnected, and read the
    current during the 20 s sleep. If it's above ~0.1 mA, remove the power LED
    and measure again.
