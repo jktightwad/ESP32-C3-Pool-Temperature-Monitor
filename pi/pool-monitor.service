@@ -9,6 +9,8 @@ User=pi
 # Edit this path if the repo is cloned somewhere else
 WorkingDirectory=/home/pi/ESP32-C3-Pool-Temperature-Monitor/pi
 EnvironmentFile=/etc/pool-monitor.env
+# Lets the service (running as pi, not root) listen on port 80
+AmbientCapabilities=CAP_NET_BIND_SERVICE
 ExecStart=/usr/bin/python3 app.py
 Restart=always
 RestartSec=5

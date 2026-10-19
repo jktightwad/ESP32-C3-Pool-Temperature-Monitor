@@ -134,6 +134,27 @@ Updating later: `cd ~/ESP32-C3-Pool-Temperature-Monitor && git pull`, then
   where readings are missing instead of joining across the gap
 - A table view of the most recent readings
 
+## 4. Friendly name: http://pool-temp.local
+
+Publishes the extra mDNS name `pool-temp.local` for the Pi (the Pi keeps its
+own hostname) and serves the page on port 80 so no `:port` is needed.
+
+```bash
+sudo apt install -y avahi-utils
+sudo ss -tlnp | grep ':80 '                 # must print nothing
+sudo nano /etc/pool-monitor.env             # set WEB_PORT=80
+sudo cp ~/ESP32-C3-Pool-Temperature-Monitor/pi/pool-monitor.service /etc/systemd/system/
+sudo cp ~/ESP32-C3-Pool-Temperature-Monitor/pi/pool-temp-mdns.service /etc/systemd/system/
+sudo systemctl daemon-reload
+sudo systemctl restart pool-monitor
+sudo systemctl enable --now pool-temp-mdns
+systemctl is-active pool-monitor pool-temp-mdns
+```
+
+`pool-temp-mdns.service` contains the Pi's Ethernet IP (192.168.1.86); if
+that ever changes, edit it and restart the service. Then open
+`http://pool-temp.local`.
+
 ## Troubleshooting
 
 ### `piserver.local` doesn't resolve (but the IP works)

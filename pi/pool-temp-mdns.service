@@ -1,0 +1,16 @@
+[Unit]
+Description=Publish pool-temp.local (mDNS alias for this Pi)
+After=avahi-daemon.service network-online.target
+Requires=avahi-daemon.service
+
+[Service]
+Type=simple
+# Address must be the Pi's reserved Ethernet IP; update if it changes.
+# -R: don't publish a reverse (IP -> name) record, which would conflict with
+# the Pi's own hostname record for the same IP.
+ExecStart=/usr/bin/avahi-publish -a -R pool-temp.local 192.168.1.86
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target
