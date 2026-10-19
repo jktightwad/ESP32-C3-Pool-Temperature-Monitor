@@ -74,7 +74,7 @@ arrive on `pool/temp`.
 
 `pi/app.py` is one service that does both: it subscribes to `pool/temp`,
 stores every reading in SQLite (`pi/pool.db`, timestamped by the Pi's clock),
-and serves the page on port 8080. Chart.js is bundled in `pi/static/`, so the
+and serves the page on port 8090 (8080 is taken by the Orbi dashboard on piserver). Chart.js is bundled in `pi/static/`, so the
 page works without internet access.
 
 Install the Python packages from Raspbian's repository (no pip needed):
@@ -116,8 +116,8 @@ journalctl -u pool-monitor -f          # live log, Ctrl+C to stop
 ```
 
 The log should show `MQTT connected ... subscribing to pool/temp`, then a
-`Stored {...}` line for each reading. Open `http://piserver:8080` (or
-`http://<pi-ip>:8080`) in a browser.
+`Stored {...}` line for each reading. Open `http://piserver:8090` (or
+`http://<pi-ip>:8090`) in a browser.
 
 Updating later: `cd ~/ESP32-C3-Pool-Temperature-Monitor && git pull`, then
 `sudo systemctl restart pool-monitor`.

@@ -24,7 +24,7 @@ MQTT_USER = os.environ.get("MQTT_USER", "pool")
 MQTT_PASSWORD = os.environ.get("MQTT_PASSWORD", "")
 MQTT_TOPIC = os.environ.get("MQTT_TOPIC", "pool/temp")
 DB_PATH = os.environ.get("DB_PATH", os.path.join(os.path.dirname(__file__), "pool.db"))
-WEB_PORT = int(os.environ.get("WEB_PORT", "8080"))
+WEB_PORT = int(os.environ.get("WEB_PORT", "8090"))
 # Readings older than this show as "stale" on the page. Should be a few
 # report intervals (firmware default interval is 10 min).
 STALE_MINUTES = int(os.environ.get("STALE_MINUTES", "30"))
