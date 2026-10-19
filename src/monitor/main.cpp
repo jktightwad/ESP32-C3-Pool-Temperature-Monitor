@@ -4,9 +4,9 @@
 // Probe pins and calibration live in include/probes.h; WiFi + MQTT settings
 // in include/secrets.h.
 //
-// Payload on MQTT_TOPIC, temperatures in C after calibration, null if a probe
-// is missing:
-//   {"surface":25.31,"mid":25.12,"bottom":24.94,"uncal":0,"rssi":-61,
+// Payload on MQTT_TOPIC, temperatures in F after calibration, null if a probe
+// is missing (calibration itself is done in C, the sensor's native unit):
+//   {"surface_f":77.56,"mid_f":77.22,"bottom_f":76.89,"uncal":0,"rssi":-61,
 //    "boot":42,"awake_ms":2130}
 // "uncal" counts probes found but not in KNOWN_PROBES (no offset applied).
 
@@ -43,12 +43,14 @@ static bool connectWiFi() {
   return ok;
 }
 
-// Appends ,"key":value (or null) to the JSON buffer.
+// Appends ,"<key>_f":value (or null) to the JSON buffer, converting C to F.
 static size_t appendTemp(char *buf, size_t len, size_t pos, const char *key, float c) {
+  const char *sep = pos > 1 ? "," : "";
   if (c == DEVICE_DISCONNECTED_C) {
-    return pos + snprintf(buf + pos, len - pos, "%s\"%s\":null", pos > 1 ? "," : "", key);
+    return pos + snprintf(buf + pos, len - pos, "%s\"%s_f\":null", sep, key);
   }
-  return pos + snprintf(buf + pos, len - pos, "%s\"%s\":%.2f", pos > 1 ? "," : "", key, c);
+  return pos + snprintf(buf + pos, len - pos, "%s\"%s_f\":%.2f", sep, key,
+                        c * 9.0f / 5.0f + 32.0f);
 }
 
 static void runCycle() {
