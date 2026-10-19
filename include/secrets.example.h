@@ -10,3 +10,8 @@
 #define MQTT_PORT     1883
 #define MQTT_USER     "pool"
 #define MQTT_PASSWORD "your-mqtt-password"
+
+// Optional local test overrides for the monitor firmware (defaults in
+// src/monitor/main.cpp: 600 s interval, debug mode on). Uncomment to use.
+// #define REPORT_INTERVAL_S   30
+// #define DEBUG_NO_DEEP_SLEEP 1

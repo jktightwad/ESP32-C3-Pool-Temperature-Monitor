@@ -16,11 +16,18 @@
 #include "secrets.h"
 #include "probes.h"
 
+// Local test settings: override either of these in include/secrets.h (which
+// isn't committed) instead of editing this file, so pulls never conflict.
+//
 // 1 = stay awake between cycles so the USB serial monitor stays connected.
 // 0 = real deep sleep (for battery use; USB serial drops every cycle).
+#ifndef DEBUG_NO_DEEP_SLEEP
 #define DEBUG_NO_DEEP_SLEEP 1
-
-static const uint32_t REPORT_INTERVAL_S = 600;  // 10 min; lower it for testing
+#endif
+// Seconds between readings.
+#ifndef REPORT_INTERVAL_S
+#define REPORT_INTERVAL_S 600
+#endif
 static const uint32_t WIFI_ATTEMPT_MS   = 8000;   // per attempt, 2 attempts
 static const char    *MQTT_TOPIC        = "pool/temp";
 static const char    *MQTT_CLIENT_ID    = "pool-monitor";
@@ -137,5 +144,5 @@ void loop() {
   // Only reached with DEBUG_NO_DEEP_SLEEP; otherwise setup() ends in deep sleep.
   runCycle();
   Serial.printf("Waiting %lu s\n", (unsigned long)REPORT_INTERVAL_S);
-  delay(REPORT_INTERVAL_S * 1000UL);
+  delay((uint32_t)REPORT_INTERVAL_S * 1000UL);
 }
