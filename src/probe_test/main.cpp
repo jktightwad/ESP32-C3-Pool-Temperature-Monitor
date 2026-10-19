@@ -54,6 +54,9 @@ static void printAddress(const DeviceAddress a) {
 // probe was newly found (so a reconnected probe is announced).
 static void scanProbe(Probe &p, bool verbose) {
   bool wasFound = p.found;
+  // Re-init the bus at runtime; the global constructor runs before the
+  // Arduino framework is fully up, so don't rely on its pin setup.
+  p.bus.begin(p.pin);
   p.sensor.begin();
   p.sensor.setWaitForConversion(false);  // start all, then wait once
   p.found = p.sensor.getAddress(p.addr, 0) && p.sensor.validFamily(p.addr);
