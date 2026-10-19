@@ -1,0 +1,71 @@
+# Pool Temperature Monitor
+
+Battery-powered multi-depth water temperature monitor for an above-ground pool.
+An ESP32-C3 SuperMini wakes, reads DS18B20 probes, publishes over WiFi/MQTT and
+deep sleeps. A Raspberry Pi logs to SQLite and serves a Chart.js web page.
+
+Design notes and decisions: [docs/HANDOFF.md](docs/HANDOFF.md)
+
+## Status
+
+`src/main.cpp` is currently a **WiFi test sketch**. It connects, prints connect
+time, RSSI, channel and BSSID, then deep sleeps for 20 s and repeats.
+
+## Getting started (VS Code + PlatformIO)
+
+1. Install the **PlatformIO IDE** extension in VS Code.
+2. Clone this repo: `Ctrl+Shift+P` → **Git: Clone** → paste the repo URL.
+   Open the folder; PlatformIO detects `platformio.ini`.
+3. Copy `include/secrets.example.h` to `include/secrets.h` and fill in your WiFi
+   credentials. `secrets.h` is git-ignored.
+4. Build (✓ in the status bar), then Upload (→). If the upload doesn't start,
+   hold **BOOT**, tap **RESET**, release **BOOT**, and upload again.
+5. Open the Serial Monitor (plug icon). The board drops off USB during deep
+   sleep and comes back on each wake, so expect gaps or reconnects.
+
+## Pin map (ESP32-C3 SuperMini)
+
+| GPIO | Use | Notes |
+|------|-----|-------|
+| 4 | 1-Wire data | 4.7 kΩ pull-up to probe VDD (GPIO5) |
+| 5 | Probe power | Off during sleep |
+| 3 | Battery voltage | High-value divider, ADC1 (works with WiFi on) |
+| 8 | Onboard LED | Assumed active-low, still to be verified; strapping pin |
+
+Avoid GPIO 2, 8 and 9 (strapping pins) for external circuits.
+
+## Test procedure
+
+1. **WiFi:** run the sketch at the pool edge. Record connect time and RSSI over
+   several cycles, and note any failures.
+2. **Sleep current:** set `USE_LED 0`, run from the battery only
+   (LiPo+ → meter on mA range → 5V pin) with USB disconnected, and read the
+   current during the 20 s sleep. If it's above ~0.1 mA, remove the power LED
+   and measure again.
+
+## Open items to verify (not yet confirmed)
+
+- **USB + battery together:** check whether the SuperMini has a diode between
+  USB VBUS and the 5V pin. If it doesn't, plugging USB in with the LiPo connected
+  would back-feed the battery. Until that's confirmed, disconnect the battery
+  before plugging in USB.
+- **Charging:** as far as I know the plain SuperMini has no LiPo charger. Plan on
+  an external charger/protection module (e.g. a protected TP4056 board) or
+  charging the battery separately.
+- **Regulator dropout:** as the battery falls toward ~3.4–3.5 V, the 3.3 V rail
+  will sag under WiFi load. Confirm the actual brownout point with the battery
+  ADC reading, then set the firmware's low-battery cutoff from that.
+- **Probe power pin in deep sleep:** GPIO output states aren't guaranteed in
+  deep sleep. The production firmware needs to hold GPIO5 low explicitly (or
+  pull it down) and confirm the probes are actually off.
+- **Battery ADC accuracy:** with a high-value divider, add ~100 nF from the
+  ADC pin to GND so the ADC's sample capacitor charges properly. Calibrate
+  against a multimeter.
+
+## Roadmap
+
+1. WiFi / sleep-current tests (this sketch)
+2. Probe scan + ice-bath calibration sketch
+3. Production firmware (fast reconnect, ROM→depth map with offsets, battery ADC,
+   JSON over MQTT)
+4. Pi stack (Mosquitto, Python subscriber → SQLite, Flask + Chart.js, systemd)
