@@ -35,9 +35,10 @@ bar's `env:` selector):
 | GPIO | Use | Notes |
 |------|-----|-------|
 | 4 | Probe power (3.3 V) | To all three adapter VCC terminals; off during sleep |
-| 5 | Surface probe DATA | Own 1-Wire bus; pull-up on the adapter board |
-| 6 | Mid probe DATA | Own 1-Wire bus; pull-up on the adapter board |
+| 10 | Surface probe DATA | Own 1-Wire bus; pull-up on the adapter board |
+| 1 | Mid probe DATA | Own 1-Wire bus; pull-up on the adapter board |
 | 7 | Bottom probe DATA | Own 1-Wire bus; pull-up on the adapter board |
+| 5, 6 | Not used | Found no probes on the first board; cause not identified |
 | 3 | Battery voltage | High-value divider, ADC1 (works with WiFi on) |
 | 8 | Onboard LED | Assumed active-low, still to be verified; strapping pin |
 
@@ -49,8 +50,9 @@ the pull-up puts VCC on the DATA line, and the C3's GPIOs aren't 5 V tolerant.
 
 ## Test procedure
 
-1. **Probes:** wire per the table above, run `probe_test`, and label each
-   probe with its depth and printed ROM address. For calibration, put all probes in a stirred
+1. **Probes:** wire per the table above and run `probe_test`. The pin decides
+   the depth; calibration offsets are per pin, so redo the ice bath for a
+   probe if it moves to a different pin. For calibration, put all probes in a stirred
    ice-water bath (lots of crushed ice, topped with water) and let them settle
    a few minutes. Record each probe's reading; the offset is `0.000 - reading`.
    Type `r` in the monitor to rescan after adding or swapping probes.

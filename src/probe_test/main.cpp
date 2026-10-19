@@ -5,17 +5,23 @@
 // Wiring per probe adapter board (each has its own 4.7k pull-up):
 //   VCC  -> GPIO4 (3.3 V when on -- never 5 V, see README)
 //   GND  -> GND
-//   DATA -> GPIO5 (surface), GPIO6 (mid) or GPIO7 (bottom)
+//   DATA -> SURFACE_PIN, MID_PIN or BOTTOM_PIN below
+//
+// GPIO5 and GPIO6 found no probes on the first board (all three probes work
+// on GPIO7; cause not identified), so surface/mid moved to GPIO10/GPIO1.
 
 #include <Arduino.h>
 #include <OneWire.h>
 #include <DallasTemperature.h>
 
 #define PROBE_POWER_PIN 4
+#define SURFACE_PIN     10
+#define MID_PIN         1
+#define BOTTOM_PIN      7
 
-OneWire wireSurface(5);
-OneWire wireMid(6);
-OneWire wireBottom(7);
+OneWire wireSurface(SURFACE_PIN);
+OneWire wireMid(MID_PIN);
+OneWire wireBottom(BOTTOM_PIN);
 
 DallasTemperature surface(&wireSurface);
 DallasTemperature mid(&wireMid);
