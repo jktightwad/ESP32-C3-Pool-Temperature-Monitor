@@ -1,6 +1,9 @@
-// DS18B20 probe test for the ESP32-C3 SuperMini.
-// One probe per pin: the pin decides the depth, no ROM addresses needed.
-// Prints all three temperatures every 3 seconds.
+// DS18B20 probe test / calibration sketch for the ESP32-C3 SuperMini.
+// One probe per pin: the pin decides the depth.
+// Each probe's ROM address is read when it's detected (at boot, or when it's
+// reconnected) and looked up in KNOWN_PROBES[] to apply its calibration
+// offset, so the offset follows the physical probe if probes are swapped.
+// Unknown probes still read, flagged "uncal".
 //
 // Wiring per probe adapter board (each has its own 4.7k pull-up):
 //   VCC  -> GPIO4 (3.3 V when on -- never 5 V, see README)
@@ -19,22 +22,71 @@
 #define MID_PIN         1
 #define BOTTOM_PIN      7
 
+// Calibration table: fill in from the ice bath (offset = 0.0 - reading).
+// Copy the address line printed at detection into the first field.
+struct KnownProbe {
+  DeviceAddress addr;
+  float offsetC;
+};
+static const KnownProbe KNOWN_PROBES[] = {
+  // { { 0x28, 0xA0, 0x2E, 0x6E, 0x00, 0x00, 0x00, 0x9D }, 0.00f },
+  { { 0 }, 0.0f },  // placeholder so the array is never empty; never matches
+};
+static const uint8_t KNOWN_COUNT = sizeof(KNOWN_PROBES) / sizeof(KNOWN_PROBES[0]);
+
 OneWire wireSurface(SURFACE_PIN);
 OneWire wireMid(MID_PIN);
 OneWire wireBottom(BOTTOM_PIN);
 
-DallasTemperature surface(&wireSurface);
-DallasTemperature mid(&wireMid);
-DallasTemperature bottom(&wireBottom);
+DallasTemperature sensorSurface(&wireSurface);
+DallasTemperature sensorMid(&wireMid);
+DallasTemperature sensorBottom(&wireBottom);
 
-static void printTemp(const char *name, DallasTemperature &probe) {
-  float c = probe.getTempCByIndex(0);
-  if (c == DEVICE_DISCONNECTED_C) {
-    Serial.printf("  %s: --", name);
-    probe.begin();  // look for it again next time
-    probe.setWaitForConversion(false);
+struct Channel {
+  const char *name;
+  DallasTemperature *sensor;
+  DeviceAddress addr;
+  bool found;
+  bool calibrated;
+  float offsetC;
+};
+
+Channel channels[] = {
+  { "surface", &sensorSurface },
+  { "mid",     &sensorMid },
+  { "bottom",  &sensorBottom },
+};
+static const uint8_t CHANNEL_COUNT = sizeof(channels) / sizeof(channels[0]);
+
+static void printAddress(const DeviceAddress a) {
+  for (uint8_t i = 0; i < 8; i++) {
+    Serial.printf("0x%02X%s", a[i], i < 7 ? ", " : "");
+  }
+}
+
+// Detects the probe on a channel, reads its address and looks up its offset.
+static void detect(Channel &ch) {
+  ch.sensor->begin();
+  ch.sensor->setWaitForConversion(false);  // start all, then wait once
+  ch.found = ch.sensor->getAddress(ch.addr, 0);
+  if (!ch.found) return;
+
+  ch.calibrated = false;
+  ch.offsetC = 0.0f;
+  for (uint8_t i = 0; i < KNOWN_COUNT; i++) {
+    if (memcmp(ch.addr, KNOWN_PROBES[i].addr, sizeof(DeviceAddress)) == 0) {
+      ch.calibrated = true;
+      ch.offsetC = KNOWN_PROBES[i].offsetC;
+      break;
+    }
+  }
+
+  Serial.printf("Detected %-7s { ", ch.name);
+  printAddress(ch.addr);
+  if (ch.calibrated) {
+    Serial.printf(" }  known, offset %+.3f C\n", ch.offsetC);
   } else {
-    Serial.printf("  %s: %6.2f C / %6.2f F", name, c, c * 9.0f / 5.0f + 32.0f);
+    Serial.println(" }  NOT in KNOWN_PROBES (uncalibrated)");
   }
 }
 
@@ -46,26 +98,32 @@ void setup() {
   digitalWrite(PROBE_POWER_PIN, HIGH);
   delay(50);
 
-  surface.begin();
-  mid.begin();
-  bottom.begin();
-  surface.setWaitForConversion(false);
-  mid.setWaitForConversion(false);
-  bottom.setWaitForConversion(false);
-
   Serial.println("Probe test");
+  for (uint8_t i = 0; i < CHANNEL_COUNT; i++) detect(channels[i]);
 }
 
 void loop() {
-  // Start all three, then wait once for the conversion (750 ms at 12-bit)
-  surface.requestTemperatures();
-  mid.requestTemperatures();
-  bottom.requestTemperatures();
+  // Retry missing probes, start all conversions, wait once (750 ms at 12-bit)
+  for (uint8_t i = 0; i < CHANNEL_COUNT; i++) {
+    if (!channels[i].found) detect(channels[i]);
+  }
+  for (uint8_t i = 0; i < CHANNEL_COUNT; i++) {
+    if (channels[i].found) channels[i].sensor->requestTemperatures();
+  }
   delay(750);
 
-  printTemp("surface", surface);
-  printTemp("mid", mid);
-  printTemp("bottom", bottom);
+  for (uint8_t i = 0; i < CHANNEL_COUNT; i++) {
+    Channel &ch = channels[i];
+    float raw = ch.found ? ch.sensor->getTempC(ch.addr) : DEVICE_DISCONNECTED_C;
+    if (raw == DEVICE_DISCONNECTED_C) {
+      Serial.printf("  %s: --", ch.name);
+      ch.found = false;  // detect again next loop
+      continue;
+    }
+    float c = raw + ch.offsetC;
+    Serial.printf("  %s: %6.2f C / %6.2f F (raw %6.3f)%s", ch.name, c,
+                  c * 9.0f / 5.0f + 32.0f, raw, ch.calibrated ? "" : " uncal");
+  }
   Serial.println();
 
   delay(2250);
