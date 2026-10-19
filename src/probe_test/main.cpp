@@ -22,15 +22,19 @@
 #define MID_PIN         1
 #define BOTTOM_PIN      7
 
-// Calibration table: fill in from the ice bath (offset = 0.0 - reading).
-// Copy the address line printed at detection into the first field.
+// Calibration table, keyed by probe ROM address.
+// Current offsets are RELATIVE only: from a shared bath that was ~1.07 C, not
+// a verified 0 C, so they align the probes to their mean (spread was 0.125 C)
+// but don't correct absolute error. For absolute calibration, redo with a
+// packed crushed-ice bath (offset = 0.0 - reading) or a reference thermometer.
 struct KnownProbe {
   DeviceAddress addr;
   float offsetC;
 };
 static const KnownProbe KNOWN_PROBES[] = {
-  // { { 0x28, 0xA0, 0x2E, 0x6E, 0x00, 0x00, 0x00, 0x9D }, 0.00f },
-  { { 0 }, 0.0f },  // placeholder so the array is never empty; never matches
+  { { 0x28, 0x04, 0x66, 0x6F, 0x00, 0x00, 0x00, 0x45 }, -0.050f },  // read 1.125
+  { { 0x28, 0xA0, 0x2E, 0x6E, 0x00, 0x00, 0x00, 0x9D }, +0.038f },  // read 1.037
+  { { 0x28, 0x39, 0x46, 0x6E, 0x00, 0x00, 0x00, 0x95 }, +0.013f },  // read 1.062
 };
 static const uint8_t KNOWN_COUNT = sizeof(KNOWN_PROBES) / sizeof(KNOWN_PROBES[0]);
 
