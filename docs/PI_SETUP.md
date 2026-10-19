@@ -134,26 +134,24 @@ Updating later: `cd ~/ESP32-C3-Pool-Temperature-Monitor && git pull`, then
   where readings are missing instead of joining across the gap
 - A table view of the most recent readings
 
-## 4. Friendly name: http://pool-temp.local
+## 4. Friendly name: http://pool-temp.local:8090
 
 Publishes the extra mDNS name `pool-temp.local` for the Pi (the Pi keeps its
-own hostname) and serves the page on port 80 so no `:port` is needed.
+own hostname). The page stays on port 8090 so port 80 remains free for other
+services; if several web apps end up on this Pi, a reverse proxy on port 80
+(e.g. nginx) can map each name to its app and drop the `:port` from URLs.
 
 ```bash
 sudo apt install -y avahi-utils
-sudo ss -tlnp | grep ':80 '                 # must print nothing
-sudo nano /etc/pool-monitor.env             # set WEB_PORT=80
-sudo cp ~/ESP32-C3-Pool-Temperature-Monitor/pi/pool-monitor.service /etc/systemd/system/
 sudo cp ~/ESP32-C3-Pool-Temperature-Monitor/pi/pool-temp-mdns.service /etc/systemd/system/
 sudo systemctl daemon-reload
-sudo systemctl restart pool-monitor
 sudo systemctl enable --now pool-temp-mdns
-systemctl is-active pool-monitor pool-temp-mdns
+systemctl is-active pool-temp-mdns
 ```
 
 `pool-temp-mdns.service` contains the Pi's Ethernet IP (192.168.1.86); if
 that ever changes, edit it and restart the service. Then open
-`http://pool-temp.local`.
+`http://pool-temp.local:8090`.
 
 ## Troubleshooting
 
