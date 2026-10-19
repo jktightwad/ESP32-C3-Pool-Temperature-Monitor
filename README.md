@@ -34,18 +34,23 @@ bar's `env:` selector):
 
 | GPIO | Use | Notes |
 |------|-----|-------|
-| 4 | 1-Wire data | 4.7 kΩ pull-up to probe VDD (GPIO5) |
-| 5 | Probe power | Off during sleep |
+| 4 | Probe power (3.3 V) | To all three adapter VCC terminals; off during sleep |
+| 5 | Surface probe DATA | Own 1-Wire bus; pull-up on the adapter board |
+| 6 | Mid probe DATA | Own 1-Wire bus; pull-up on the adapter board |
+| 7 | Bottom probe DATA | Own 1-Wire bus; pull-up on the adapter board |
 | 3 | Battery voltage | High-value divider, ADC1 (works with WiFi on) |
 | 8 | Onboard LED | Assumed active-low, still to be verified; strapping pin |
 
 Avoid GPIO 2, 8 and 9 (strapping pins) for external circuits.
 
+Each probe connects through its own adapter board (4.7 kΩ "472" pull-up from
+DATA to VCC on the board). Power the adapters from GPIO4 (3.3 V), **never 5 V**:
+the pull-up puts VCC on the DATA line, and the C3's GPIOs aren't 5 V tolerant.
+
 ## Test procedure
 
-1. **Probes:** wire per the table above (one 4.7 kΩ resistor from DATA to the
-   GPIO5 VDD line for the whole bus), run `probe_test`, and label each probe
-   with its printed ROM address. For calibration, put all probes in a stirred
+1. **Probes:** wire per the table above, run `probe_test`, and label each
+   probe with its depth and printed ROM address. For calibration, put all probes in a stirred
    ice-water bath (lots of crushed ice, topped with water) and let them settle
    a few minutes. Record each probe's reading; the offset is `0.000 - reading`.
    Type `r` in the monitor to rescan after adding or swapping probes.
@@ -69,7 +74,7 @@ Avoid GPIO 2, 8 and 9 (strapping pins) for external circuits.
   will sag under WiFi load. Confirm the actual brownout point with the battery
   ADC reading, then set the firmware's low-battery cutoff from that.
 - **Probe power pin in deep sleep:** GPIO output states aren't guaranteed in
-  deep sleep. The production firmware needs to hold GPIO5 low explicitly (or
+  deep sleep. The production firmware needs to hold GPIO4 low explicitly (or
   pull it down) and confirm the probes are actually off.
 - **Battery ADC accuracy:** with a high-value divider, add ~100 nF from the
   ADC pin to GND so the ADC's sample capacitor charges properly. Calibrate

@@ -1,35 +1,47 @@
 // DS18B20 probe test / calibration sketch for the ESP32-C3 SuperMini.
-// - Powers the probes from GPIO5, reads the 1-Wire bus on GPIO4.
-// - Lists every probe's ROM address (copy these into the production firmware
-//   to map each probe to a depth).
+// One probe per GPIO (one 1-Wire bus each), so a failed probe can't take
+// down the others and the pin identifies the depth.
+// - Powers all probes from PROBE_POWER_PIN.
+// - Prints each probe's ROM address (record it with the calibration offset).
 // - Reads all probes every few seconds at 12-bit resolution and prints each
 //   temperature plus the spread between highest and lowest, for ice-bath
 //   calibration (all probes in the same bath should read the same).
-// Type 'r' in the serial monitor to rescan the bus (e.g. after adding a probe).
+// Type 'r' in the serial monitor to rescan (e.g. after reconnecting a probe).
 //
-// Wiring (per probe, all in parallel on one bus):
-//   VDD  -> GPIO5   (probe power, switched)
+// Wiring per probe adapter board (each has its own 4.7k pull-up):
+//   VCC  -> PROBE_POWER_PIN (3.3 V when on -- never 5 V, see README)
 //   GND  -> GND
-//   DATA -> GPIO4
-//   4.7k resistor between DATA and VDD (one resistor for the whole bus)
-// Wire colours vary by vendor -- check your probe's listing/datasheet.
+//   DATA -> that probe's pin in PROBES[] below
 
 #include <Arduino.h>
 #include <OneWire.h>
 #include <DallasTemperature.h>
 
-#define ONEWIRE_PIN     4
-#define PROBE_POWER_PIN 5
+// Switched 3.3 V supply for all probe VCC terminals.
+#define PROBE_POWER_PIN 4
 
-static const uint8_t  MAX_PROBES       = 8;
+struct Probe {
+  const char *name;
+  uint8_t pin;
+  OneWire bus;
+  DallasTemperature sensor;
+  DeviceAddress addr;
+  bool found;
+
+  Probe(const char *n, uint8_t p) : name(n), pin(p), bus(p), sensor(&bus), found(false) {}
+};
+
+// Depth assignment by pin -- edit if you wire them differently.
+Probe probes[] = {
+  {"surface", 5},
+  {"mid",     6},
+  {"bottom",  7},
+};
+static const uint8_t PROBE_COUNT = sizeof(probes) / sizeof(probes[0]);
+
 static const uint32_t READ_INTERVAL_MS = 3000;
+static const uint32_t CONVERSION_MS    = 750;   // DS18B20 max at 12-bit
 static const uint32_t SERIAL_WAIT_MS   = 3000;
-
-OneWire oneWire(ONEWIRE_PIN);
-DallasTemperature sensors(&oneWire);
-
-DeviceAddress addrs[MAX_PROBES];
-uint8_t probeCount = 0;
 
 static void printAddress(const DeviceAddress a) {
   for (uint8_t i = 0; i < 8; i++) {
@@ -37,34 +49,27 @@ static void printAddress(const DeviceAddress a) {
   }
 }
 
-static void scanBus() {
-  sensors.begin();
-  uint8_t found = sensors.getDeviceCount();
-  probeCount = 0;
+static void scanProbes() {
+  Serial.println("\nScan:");
+  for (uint8_t i = 0; i < PROBE_COUNT; i++) {
+    Probe &p = probes[i];
+    p.sensor.begin();
+    p.sensor.setWaitForConversion(false);  // start all, then wait once
+    p.found = p.sensor.getAddress(p.addr, 0) && p.sensor.validFamily(p.addr);
 
-  Serial.printf("\nScan: %u device(s) on GPIO%d\n", found, ONEWIRE_PIN);
-  for (uint8_t i = 0; i < found && probeCount < MAX_PROBES; i++) {
-    if (!sensors.getAddress(addrs[probeCount], i)) {
-      Serial.printf("  #%u: could not read address\n", i);
+    Serial.printf("  %-7s GPIO%u: ", p.name, p.pin);
+    if (!p.found) {
+      Serial.println("NOT FOUND (check DATA wire and adapter VCC/GND)");
       continue;
     }
-    if (!sensors.validFamily(addrs[probeCount])) {
-      Serial.printf("  #%u: not a DS18x20 family device, skipped\n", i);
-      continue;
+    p.sensor.setResolution(p.addr, 12);
+    Serial.print("{ ");
+    printAddress(p.addr);
+    Serial.print(" }");
+    if (p.sensor.getDeviceCount() > 1) {
+      Serial.printf("  (%u devices on this pin, using the first)", p.sensor.getDeviceCount());
     }
-    sensors.setResolution(addrs[probeCount], 12);
-    Serial.printf("  P%u: { ", probeCount);
-    printAddress(addrs[probeCount]);
-    Serial.println(" }");
-    probeCount++;
-  }
-
-  if (found == 0) {
-    Serial.println("  No probes found. Check wiring, pull-up resistor, and that");
-    Serial.println("  GPIO5 is actually powering the probe VDD line.");
-  }
-  if (sensors.isParasitePowerMode()) {
-    Serial.println("  WARNING: a probe reports parasite power -- check its VDD wire.");
+    Serial.println();
   }
   Serial.println();
 }
@@ -80,37 +85,41 @@ void setup() {
   digitalWrite(PROBE_POWER_PIN, HIGH);
   delay(50);  // let probes power up before talking to them
 
-  Serial.println("DS18B20 probe test");
-  scanBus();
+  Serial.println("DS18B20 probe test (one probe per pin)");
+  scanProbes();
 }
 
 void loop() {
   while (Serial.available()) {
-    if (Serial.read() == 'r') scanBus();
+    if (Serial.read() == 'r') scanProbes();
   }
 
   static uint32_t lastRead = 0;
   if (millis() - lastRead < READ_INTERVAL_MS) return;
   lastRead = millis();
 
-  if (probeCount == 0) {
-    Serial.println("No probes (type 'r' to rescan)");
-    return;
+  // Start conversions on every bus, then wait once for all of them.
+  for (uint8_t i = 0; i < PROBE_COUNT; i++) {
+    if (probes[i].found) probes[i].sensor.requestTemperatures();
   }
-
-  sensors.requestTemperatures();  // blocks ~750 ms at 12-bit
+  delay(CONVERSION_MS);
 
   float lo = 1000, hi = -1000;
   uint8_t good = 0;
   Serial.printf("[%7lu s]", (unsigned long)(millis() / 1000));
-  for (uint8_t i = 0; i < probeCount; i++) {
-    float c = sensors.getTempC(addrs[i]);
+  for (uint8_t i = 0; i < PROBE_COUNT; i++) {
+    Probe &p = probes[i];
+    if (!p.found) {
+      Serial.printf("  %s: --", p.name);
+      continue;
+    }
+    float c = p.sensor.getTempC(p.addr);
     if (c == DEVICE_DISCONNECTED_C) {
-      Serial.printf("  P%u: DISCONNECTED", i);
+      Serial.printf("  %s: DISCONNECTED", p.name);
       continue;
     }
     // 85.0 C is the DS18B20 power-on reset value; usually means a bad read
-    Serial.printf("  P%u: %7.3f C / %7.3f F%s", i, c, c * 9.0f / 5.0f + 32.0f,
+    Serial.printf("  %s: %7.3f C / %7.3f F%s", p.name, c, c * 9.0f / 5.0f + 32.0f,
                   c == 85.0f ? " (85.0 = power-on value, suspect)" : "");
     if (c < lo) lo = c;
     if (c > hi) hi = c;

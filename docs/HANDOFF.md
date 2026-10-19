@@ -10,7 +10,8 @@ Battery-powered multi-depth water temperature monitor for a 42" deep above-groun
   - Planned depths: surface (~3–4" below waterline, shaded), mid (~20"), bottom (~36–38"); optional air probe.
   - Mounted on a weighted nylon line hung from top rail, away from wall.
   - Seal probe/cable joints with adhesive-lined heat shrink; inspect after a few weeks.
-- **Pins (C3, avoid strapping pins 2/8/9):**
+- **Pins (C3, avoid strapping pins 2/8/9):** *Superseded -- now one probe per
+  pin (DATA on GPIO5/6/7, power on GPIO4); see README pin map. Original plan:*
   - GPIO4 = 1-Wire data (4.7k pull-up to probe VDD)
   - GPIO5 = probe power (switched off during sleep)
   - GPIO3 = battery voltage via high-value divider (ADC1, usable with WiFi on)
