@@ -8,8 +8,13 @@ Design notes and decisions: [docs/HANDOFF.md](docs/HANDOFF.md)
 
 ## Status
 
-`src/main.cpp` is currently a **WiFi test sketch**. It connects, prints connect
-time, RSSI, channel and BSSID, then deep sleeps for 20 s and repeats.
+Test sketches, each with its own PlatformIO env (pick it in the bottom status
+bar's `env:` selector):
+
+| Env | Source | Purpose |
+|-----|--------|---------|
+| `probe_test` (default) | `src/probe_test/` | Lists DS18B20 ROM addresses, reads all probes every 3 s; used for ice-bath calibration |
+| `wifi_test` | `src/wifi_test/` | WiFi connect time / RSSI / BSSID, deep-sleep cycle |
 
 ## Getting started (VS Code + PlatformIO)
 
@@ -17,7 +22,7 @@ time, RSSI, channel and BSSID, then deep sleeps for 20 s and repeats.
 2. Clone this repo: `Ctrl+Shift+P` → **Git: Clone** → paste the repo URL.
    Open the folder; PlatformIO detects `platformio.ini`.
 3. Copy `include/secrets.example.h` to `include/secrets.h` and fill in your WiFi
-   credentials. `secrets.h` is git-ignored.
+   credentials. `secrets.h` is git-ignored. (Only `wifi_test` needs it so far.)
 4. Build (✓ in the status bar), then Upload (→). If the upload doesn't start,
    hold **BOOT**, tap **RESET**, release **BOOT**, and upload again.
 5. Open the Serial Monitor (plug icon). With `DEBUG_NO_DEEP_SLEEP 1` (the
@@ -38,9 +43,15 @@ Avoid GPIO 2, 8 and 9 (strapping pins) for external circuits.
 
 ## Test procedure
 
-1. **WiFi:** run the sketch at the pool edge. Record connect time and RSSI over
+1. **Probes:** wire per the table above (one 4.7 kΩ resistor from DATA to the
+   GPIO5 VDD line for the whole bus), run `probe_test`, and label each probe
+   with its printed ROM address. For calibration, put all probes in a stirred
+   ice-water bath (lots of crushed ice, topped with water) and let them settle
+   a few minutes. Record each probe's reading; the offset is `0.000 - reading`.
+   Type `r` in the monitor to rescan after adding or swapping probes.
+2. **WiFi:** run the sketch at the pool edge. Record connect time and RSSI over
    several cycles, and note any failures.
-2. **Sleep current:** set `DEBUG_NO_DEEP_SLEEP 0` and `USE_LED 0`, run from the battery only
+3. **Sleep current:** set `DEBUG_NO_DEEP_SLEEP 0` and `USE_LED 0`, run from the battery only
    (LiPo+ → meter on mA range → 5V pin) with USB disconnected, and read the
    current during the 20 s sleep. If it's above ~0.1 mA, remove the power LED
    and measure again.
