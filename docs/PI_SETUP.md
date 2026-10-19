@@ -116,8 +116,10 @@ journalctl -u pool-monitor -f          # live log, Ctrl+C to stop
 ```
 
 The log should show `MQTT connected ... subscribing to pool/temp`, then a
-`Stored {...}` line for each reading. Open `http://piserver:8090` (or
-`http://<pi-ip>:8090`) in a browser.
+`Stored {...}` line for each reading. Open `http://<pi-ip>:8090` in a
+browser (`http://piserver.local:8090` may also work; plain `piserver` didn't
+resolve from the PC on this network). Reserve the Pi's IP on the router: the
+ESP32's `MQTT_HOST` depends on it too.
 
 Updating later: `cd ~/ESP32-C3-Pool-Temperature-Monitor && git pull`, then
 `sudo systemctl restart pool-monitor`.
