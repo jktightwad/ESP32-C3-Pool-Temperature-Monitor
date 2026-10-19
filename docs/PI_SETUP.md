@@ -133,3 +133,27 @@ Updating later: `cd ~/ESP32-C3-Pool-Temperature-Monitor && git pull`, then
 - Temperature and signal history for 24 h / 7 days / 30 days; lines break
   where readings are missing instead of joining across the gap
 - A table view of the most recent readings
+
+## Troubleshooting
+
+### `piserver.local` doesn't resolve (but the IP works)
+
+The router here doesn't resolve device names, so names rely on mDNS (Avahi on
+the Pi; the same mechanism that makes `hot-tub.local` work). On piserver,
+Avahi had renamed itself to `piserver-2.local` after a name conflict; the Pi is
+on the network twice (Ethernet 192.168.1.86 and WiFi 192.168.1.14), which is a
+likely cause. Check with:
+
+```bash
+journalctl -u avahi-daemon --no-pager | grep -iE "host name|conflict" | tail -5
+```
+
+Fix by announcing on Ethernet only:
+
+```bash
+sudo sed -i 's/^\[server\]/[server]\nallow-interfaces=eth0/' /etc/avahi/avahi-daemon.conf
+sudo systemctl restart avahi-daemon
+```
+
+Keep the ESP32's `MQTT_HOST` as an IP address: resolving a `.local` name on
+every wake adds time and another way to fail.
