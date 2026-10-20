@@ -34,23 +34,29 @@ bar's `env:` selector):
    With `0` it really deep sleeps and USB drops every cycle, so output is
    mostly unreadable -- use that mode for battery/current tests only.
 
-## Pin map (ESP32-C3 SuperMini)
+## Wiring (ESP32-C3 SuperMini)
 
-| GPIO | Use | Notes |
+| GPIO / pin | Use | Notes |
 |------|-----|-------|
-| 4 | Probe power (3.3 V) | To all three adapter VCC terminals; off during sleep |
-| 10 | Surface probe DATA | Own 1-Wire bus; pull-up on the adapter board |
-| 1 | Mid probe DATA | Own 1-Wire bus; pull-up on the adapter board |
-| 7 | Bottom probe DATA | Own 1-Wire bus; pull-up on the adapter board |
+| 4 | Probe power (3.3 V) | All probe VCC; switched off between readings |
+| 7 | 1-Wire data | All three probes on one bus; one adapter board's 4.7 kΩ pull-up |
+| 3 | Battery voltage | TP4056 OUT+ → 100 kΩ → GPIO3 → 100 kΩ → GND, 100 nF GPIO3–GND |
+| 5V | Power in | TP4056 OUT+ → 1N5817 (stripe toward 5V) → 5V pin |
+| GND | Ground | TP4056 OUT−, probes, divider |
 | 5, 6 | Not used | Found no probes on the first board; cause not identified |
-| 3 | Battery voltage | High-value divider, ADC1 (works with WiFi on) |
-| 8 | Onboard LED | Assumed active-low, still to be verified; strapping pin |
+| 8 | Onboard LED | Assumed active-low, not verified; strapping pin |
 
-Avoid GPIO 2, 8 and 9 (strapping pins) for external circuits.
+Each probe's depth comes from its ROM address (`KNOWN_PROBES` in
+`include/probes.h`, which also holds its calibration offset). A new probe shows
+as "unknown" until its address is added there.
 
-Each probe connects through its own adapter board (4.7 kΩ "472" pull-up from
-DATA to VCC on the board). Power the adapters from GPIO4 (3.3 V), **never 5 V**:
-the pull-up puts VCC on the DATA line, and the C3's GPIOs aren't 5 V tolerant.
+Power: 18650 → TP4056 (4-pad, protected) → 1N5817 → SuperMini 5V. Charge via
+the TP4056's USB-C; the diode stops the SuperMini's own USB-C from feeding the
+battery, so firmware can be uploaded with the battery connected. Measure the
+battery on the TP4056 side of the diode. Probe VCC is 3.3 V from GPIO4,
+**never 5 V**: the pull-up puts VCC on the data line, and the C3's GPIOs
+aren't 5 V tolerant. Power-bank style charge/boost modules don't work here:
+they switch their output off when the ESP32 sleeps (tested).
 
 ## Test procedure
 

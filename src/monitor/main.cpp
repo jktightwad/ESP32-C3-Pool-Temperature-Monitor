@@ -6,9 +6,11 @@
 //
 // Payload on MQTT_TOPIC, temperatures in F after calibration, null if a probe
 // is missing (calibration itself is done in C, the sensor's native unit):
-//   {"surface_f":77.56,"mid_f":77.22,"bottom_f":76.89,"uncal":0,"rssi":-61,
-//    "boot":42,"awake_ms":2130}
-// "uncal" counts probes found but not in KNOWN_PROBES (no offset applied).
+//   {"surface_f":77.56,"mid_f":77.22,"bottom_f":76.89,"uncal":0,
+//    "battery_v":3.98,"rssi":-61,"boot":42,"awake_ms":2130}
+// "uncal" counts probes on the bus that aren't in KNOWN_PROBES (so have no
+// depth or offset). battery_v is read before WiFi starts, so it isn't
+// pulled down by transmit current.
 
 #include <Arduino.h>
 #include <WiFi.h>
@@ -77,13 +79,13 @@ static void runCycle() {
   bootCount++;
   Serial.printf("\nCycle %lu\n", (unsigned long)bootCount);
 
-  // Probes: power up, detect, start conversions
+  float batteryV = readBatteryV();
+  Serial.printf("Battery %.2f V\n", batteryV);
+
+  // Probes: power up, scan the bus, start conversions
   digitalWrite(PROBE_POWER_PIN, HIGH);
   delay(50);
-  uint8_t uncal = 0;
-  for (uint8_t i = 0; i < CHANNEL_COUNT; i++) {
-    if (detectProbe(channels[i]) && !channels[i].calibrated) uncal++;
-  }
+  scanProbes();
   requestAllProbes();
   uint32_t convStart = millis();
 
@@ -92,19 +94,17 @@ static void runCycle() {
 
   while (millis() - convStart < PROBE_CONVERSION_MS) delay(5);
 
-  char payload[200];
+  char payload[220];
   size_t pos = snprintf(payload, sizeof(payload), "{");
-  for (uint8_t i = 0; i < CHANNEL_COUNT; i++) {
-    Channel &ch = channels[i];
-    float raw = readRaw(ch);
-    float c = (raw == DEVICE_DISCONNECTED_C) ? raw : raw + ch.offsetC;
-    pos = appendTemp(payload, sizeof(payload), pos, ch.name, c);
+  for (uint8_t k = 0; k < KNOWN_COUNT; k++) {
+    pos = appendTemp(payload, sizeof(payload), pos, KNOWN_PROBES[k].depth,
+                     readCalibratedC(k));
   }
   digitalWrite(PROBE_POWER_PIN, LOW);
 
   snprintf(payload + pos, sizeof(payload) - pos,
-           ",\"uncal\":%u,\"rssi\":%d,\"boot\":%lu,\"awake_ms\":%lu}",
-           uncal, wifiOk ? WiFi.RSSI() : 0, (unsigned long)bootCount,
+           ",\"uncal\":%u,\"battery_v\":%.2f,\"rssi\":%d,\"boot\":%lu,\"awake_ms\":%lu}",
+           unknownProbes, batteryV, wifiOk ? WiFi.RSSI() : 0, (unsigned long)bootCount,
            (unsigned long)(millis() - cycleStart));
   Serial.println(payload);
 

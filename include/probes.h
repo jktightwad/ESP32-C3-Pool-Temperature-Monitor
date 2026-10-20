@@ -1,15 +1,16 @@
 // Probe wiring, calibration table and helpers shared by probe_test and the
-// monitor firmware. One DS18B20 per pin: the pin decides the depth. Each
-// probe's ROM address is read on detection and looked up in KNOWN_PROBES[]
-// so its calibration offset follows the physical probe.
+// monitor firmware.
 //
-// Wiring per probe adapter board (each has its own 4.7k pull-up):
-//   VCC  -> GPIO4 (3.3 V when on -- never 5 V, see README)
-//   GND  -> GND
-//   DATA -> SURFACE_PIN, MID_PIN or BOTTOM_PIN below
+// All DS18B20 probes share one 1-Wire bus. Each probe's depth comes from its
+// ROM address in KNOWN_PROBES[], which also holds its calibration offset. A
+// probe that isn't in the table still reads, but is reported as unknown (no
+// depth, no offset) until its address is added.
 //
-// GPIO5 and GPIO6 found no probes on the first board (all three probes work
-// on GPIO7; cause not identified), so surface/mid moved to GPIO10/GPIO1.
+// Wiring (one adapter board, whose 4.7k pull-up serves the whole bus):
+//   all probe VCC  -> GPIO4 (3.3 V when on -- never 5 V, see README)
+//   all probe GND  -> GND
+//   all probe DATA -> ONEWIRE_PIN
+// Battery: TP4056 OUT+ -- 100k -- GPIO3 -- 100k -- GND (100 nF GPIO3-GND)
 #pragma once
 
 #include <Arduino.h>
@@ -17,50 +18,35 @@
 #include <DallasTemperature.h>
 
 #define PROBE_POWER_PIN 4
-#define SURFACE_PIN     10
-#define MID_PIN         1
-#define BOTTOM_PIN      7
+#define ONEWIRE_PIN     7
+#define BATTERY_PIN     3
+#define BATTERY_DIVIDER 2.0f  // two equal resistors halve the battery voltage
 
 static const uint32_t PROBE_CONVERSION_MS = 750;  // DS18B20 max at 12-bit
 
-// Calibration table, keyed by probe ROM address.
+// Depth assignment + calibration, keyed by probe ROM address. Order here is
+// the order in the payload and on the web page.
 // Offsets from a packed crushed-ice bath (0 C), averaged over 16 readings at
 // 12-bit: offset = 0.0 - average. Resolution is 0.0625 C, so each offset is
 // only good to roughly +/-0.03-0.06 C.
 struct KnownProbe {
+  const char *depth;
   DeviceAddress addr;
   float offsetC;
 };
 static const KnownProbe KNOWN_PROBES[] = {
-  { { 0x28, 0x04, 0x66, 0x6F, 0x00, 0x00, 0x00, 0x45 },  0.000f },  // avg  0.000
-  { { 0x28, 0xA0, 0x2E, 0x6E, 0x00, 0x00, 0x00, 0x9D }, +0.086f },  // avg -0.086
-  { { 0x28, 0x39, 0x46, 0x6E, 0x00, 0x00, 0x00, 0x95 }, +0.102f },  // avg -0.102
+  { "surface", { 0x28, 0x04, 0x66, 0x6F, 0x00, 0x00, 0x00, 0x45 },  0.000f },  // avg  0.000
+  { "mid",     { 0x28, 0xA0, 0x2E, 0x6E, 0x00, 0x00, 0x00, 0x9D }, +0.086f },  // avg -0.086
+  { "bottom",  { 0x28, 0x39, 0x46, 0x6E, 0x00, 0x00, 0x00, 0x95 }, +0.102f },  // avg -0.102
 };
 static const uint8_t KNOWN_COUNT = sizeof(KNOWN_PROBES) / sizeof(KNOWN_PROBES[0]);
 
-static OneWire wireSurface(SURFACE_PIN);
-static OneWire wireMid(MID_PIN);
-static OneWire wireBottom(BOTTOM_PIN);
+static OneWire oneWire(ONEWIRE_PIN);
+static DallasTemperature sensors(&oneWire);
 
-static DallasTemperature sensorSurface(&wireSurface);
-static DallasTemperature sensorMid(&wireMid);
-static DallasTemperature sensorBottom(&wireBottom);
-
-struct Channel {
-  const char *name;
-  DallasTemperature *sensor;
-  DeviceAddress addr;
-  bool found;
-  bool calibrated;
-  float offsetC;
-};
-
-static Channel channels[] = {
-  { "surface", &sensorSurface },
-  { "mid",     &sensorMid },
-  { "bottom",  &sensorBottom },
-};
-static const uint8_t CHANNEL_COUNT = sizeof(channels) / sizeof(channels[0]);
+// Which known probes were found on the last scan, and how many unknown ones.
+static bool probePresent[KNOWN_COUNT];
+static uint8_t unknownProbes = 0;
 
 inline void printAddress(const DeviceAddress a) {
   for (uint8_t i = 0; i < 8; i++) {
@@ -68,48 +54,61 @@ inline void printAddress(const DeviceAddress a) {
   }
 }
 
-// Detects the probe on a channel, reads its address and looks up its offset.
-inline bool detectProbe(Channel &ch) {
-  ch.sensor->begin();
-  ch.sensor->setWaitForConversion(false);  // start all, then wait once
-  ch.found = ch.sensor->getAddress(ch.addr, 0);
-  ch.calibrated = false;
-  ch.offsetC = 0.0f;
-  if (!ch.found) {
-    Serial.printf("Probe %-7s not found\n", ch.name);
-    return false;
-  }
+// Scans the bus, matches each probe to KNOWN_PROBES and prints what it found.
+// Returns the number of devices on the bus.
+inline uint8_t scanProbes() {
+  sensors.begin();
+  sensors.setWaitForConversion(false);  // start conversion, then wait once
+  sensors.setResolution(12);
+  for (uint8_t k = 0; k < KNOWN_COUNT; k++) probePresent[k] = false;
+  unknownProbes = 0;
 
-  for (uint8_t i = 0; i < KNOWN_COUNT; i++) {
-    if (memcmp(ch.addr, KNOWN_PROBES[i].addr, sizeof(DeviceAddress)) == 0) {
-      ch.calibrated = true;
-      ch.offsetC = KNOWN_PROBES[i].offsetC;
-      break;
+  uint8_t count = sensors.getDeviceCount();
+  for (uint8_t i = 0; i < count; i++) {
+    DeviceAddress a;
+    if (!sensors.getAddress(a, i)) continue;
+    int match = -1;
+    for (uint8_t k = 0; k < KNOWN_COUNT; k++) {
+      if (memcmp(a, KNOWN_PROBES[k].addr, sizeof(DeviceAddress)) == 0) match = k;
+    }
+    Serial.print("Probe { ");
+    printAddress(a);
+    if (match >= 0) {
+      probePresent[match] = true;
+      Serial.printf(" }  %s, offset %+.3f C\n", KNOWN_PROBES[match].depth,
+                    KNOWN_PROBES[match].offsetC);
+    } else {
+      unknownProbes++;
+      Serial.println(" }  UNKNOWN (add to KNOWN_PROBES with its depth)");
     }
   }
-
-  Serial.printf("Probe %-7s { ", ch.name);
-  printAddress(ch.addr);
-  if (ch.calibrated) {
-    Serial.printf(" }  known, offset %+.3f C\n", ch.offsetC);
-  } else {
-    Serial.println(" }  NOT in KNOWN_PROBES (uncalibrated)");
+  for (uint8_t k = 0; k < KNOWN_COUNT; k++) {
+    if (!probePresent[k]) Serial.printf("Probe %s NOT FOUND\n", KNOWN_PROBES[k].depth);
   }
-  return true;
+  return count;
 }
 
-// Starts a conversion on every detected probe (non-blocking).
+// Starts a conversion on every probe on the bus (non-blocking).
 inline void requestAllProbes() {
-  for (uint8_t i = 0; i < CHANNEL_COUNT; i++) {
-    if (channels[i].found) channels[i].sensor->requestTemperatures();
-  }
+  sensors.requestTemperatures();
 }
 
-// Returns the raw reading, or DEVICE_DISCONNECTED_C. Marks the channel as not
-// found on failure so it gets detected again.
-inline float readRaw(Channel &ch) {
-  if (!ch.found) return DEVICE_DISCONNECTED_C;
-  float raw = ch.sensor->getTempC(ch.addr);
-  if (raw == DEVICE_DISCONNECTED_C) ch.found = false;
-  return raw;
+// Raw reading of known probe k in C, or DEVICE_DISCONNECTED_C.
+inline float readRawC(uint8_t k) {
+  if (!probePresent[k]) return DEVICE_DISCONNECTED_C;
+  return sensors.getTempC(KNOWN_PROBES[k].addr);
+}
+
+// Calibrated reading of known probe k in C, or DEVICE_DISCONNECTED_C.
+inline float readCalibratedC(uint8_t k) {
+  float raw = readRawC(k);
+  return raw == DEVICE_DISCONNECTED_C ? raw : raw + KNOWN_PROBES[k].offsetC;
+}
+
+// Battery voltage via the divider on BATTERY_PIN, averaged over 16 samples.
+// analogReadMilliVolts() applies the chip's factory ADC calibration.
+inline float readBatteryV() {
+  uint32_t mv = 0;
+  for (uint8_t i = 0; i < 16; i++) mv += analogReadMilliVolts(BATTERY_PIN);
+  return (mv / 16.0f) * BATTERY_DIVIDER / 1000.0f;
 }

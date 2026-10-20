@@ -1,8 +1,8 @@
 // DS18B20 probe test / calibration sketch for the ESP32-C3 SuperMini.
-// Reads all probes every 3 s and prints calibrated temperatures in F, plus
-// the raw reading in C for calibration.
-// Probe pins and the calibration table live in include/probes.h.
-// Missing probes are detected again automatically on every read.
+// Scans the shared 1-Wire bus every 3 s and prints each known probe's
+// calibrated temperature in F (plus the raw reading in C, for calibration)
+// and the battery voltage. Probe addresses, depths and offsets live in
+// include/probes.h.
 
 #include <Arduino.h>
 #include "probes.h"
@@ -15,30 +15,26 @@ void setup() {
   digitalWrite(PROBE_POWER_PIN, HIGH);
   delay(50);
 
-  Serial.println("Probe test");
-  for (uint8_t i = 0; i < CHANNEL_COUNT; i++) detectProbe(channels[i]);
+  Serial.println("Probe test (single bus)");
 }
 
 void loop() {
-  for (uint8_t i = 0; i < CHANNEL_COUNT; i++) {
-    if (!channels[i].found) detectProbe(channels[i]);
-  }
+  Serial.println();
+  uint8_t count = scanProbes();
   requestAllProbes();
   delay(PROBE_CONVERSION_MS);
 
-  for (uint8_t i = 0; i < CHANNEL_COUNT; i++) {
-    Channel &ch = channels[i];
-    float raw = readRaw(ch);
+  Serial.printf("%u device(s) on GPIO%d |", count, ONEWIRE_PIN);
+  for (uint8_t k = 0; k < KNOWN_COUNT; k++) {
+    float raw = readRawC(k);
     if (raw == DEVICE_DISCONNECTED_C) {
-      Serial.printf("  %s: --", ch.name);
+      Serial.printf("  %s: --", KNOWN_PROBES[k].depth);
       continue;
     }
-    // Displayed in F; raw stays in C (the sensor's unit) for calibration.
-    float f = (raw + ch.offsetC) * 9.0f / 5.0f + 32.0f;
-    Serial.printf("  %s: %6.2f F (raw %6.3f C)%s", ch.name, f, raw,
-                  ch.calibrated ? "" : " uncal");
+    float f = (raw + KNOWN_PROBES[k].offsetC) * 9.0f / 5.0f + 32.0f;
+    Serial.printf("  %s: %6.2f F (raw %6.3f C)", KNOWN_PROBES[k].depth, f, raw);
   }
-  Serial.println();
+  Serial.printf("  | battery %.2f V\n", readBatteryV());
 
   delay(2250);
 }

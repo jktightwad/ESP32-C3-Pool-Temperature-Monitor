@@ -88,6 +88,7 @@
     <div class="card tile"><div class="label"><span class="swatch" style="background:var(--series-1)"></span>Surface</div><div class="value" id="v-surface">–</div></div>
     <div class="card tile"><div class="label"><span class="swatch" style="background:var(--series-2)"></span>Mid</div><div class="value" id="v-mid">–</div></div>
     <div class="card tile"><div class="label"><span class="swatch" style="background:var(--series-3)"></span>Bottom</div><div class="value" id="v-bottom">–</div></div>
+    <div class="card tile"><div class="label">Battery</div><div class="value" id="v-batt">–</div></div>
     <div class="card tile"><div class="label">WiFi signal</div><div class="value" id="v-rssi">–</div></div>
   </div>
 
@@ -101,6 +102,10 @@
     <div class="card">
       <h2>Water temperature (°F)</h2>
       <div class="chart"><canvas id="tempChart" aria-label="Water temperature over time by depth"></canvas></div>
+    </div>
+    <div class="card">
+      <h2>Battery (V)</h2>
+      <div class="chart small"><canvas id="battChart" aria-label="Battery voltage over time"></canvas></div>
     </div>
     <div class="card">
       <h2>WiFi signal (dBm)</h2>
@@ -119,7 +124,7 @@
 <script>
 const css = name => getComputedStyle(document.documentElement).getPropertyValue(name).trim();
 let hours = 24;
-let tempChart, rssiChart;
+let tempChart, battChart, rssiChart;
 
 // Tick labels: time of day for 24 h, date for longer ranges.
 const fmtTick = ms => {
@@ -193,18 +198,24 @@ function draw(data) {
     line("Mid", series(rows, "mid_f", gap), css("--series-2")),
     line("Bottom", series(rows, "bottom_f", gap), css("--series-3")),
   ];
+  const batt = [line("Battery", series(rows, "battery_v", gap), css("--ink-2"))];
   const rssi = [line("RSSI", series(rows, "rssi", gap), css("--ink-2"))];
 
   if (!tempChart) {
     tempChart = new Chart(document.getElementById("tempChart"), { type: "line", data: { datasets: temp }, options: baseOptions("°F") });
+    // Single-series charts: the card title names the series, so no legend.
+    const bo = baseOptions("V");
+    bo.plugins.legend.display = false;
+    battChart = new Chart(document.getElementById("battChart"), { type: "line", data: { datasets: batt }, options: bo });
     const ro = baseOptions("dBm");
-    ro.plugins.legend.display = false;  // single series; the card title names it
+    ro.plugins.legend.display = false;
     rssiChart = new Chart(document.getElementById("rssiChart"), { type: "line", data: { datasets: rssi }, options: ro });
   } else {
     tempChart.data.datasets = temp;
+    battChart.data.datasets = batt;
     rssiChart.data.datasets = rssi;
   }
-  for (const c of [tempChart, rssiChart]) {
+  for (const c of [tempChart, battChart, rssiChart]) {
     c.options.scales.x.min = xMin;
     c.options.scales.x.max = xMax;
     c.update();
@@ -213,10 +224,11 @@ function draw(data) {
   const fmt = v => v == null ? "–" : v.toFixed(1);
   const recent = rows.slice(-100).reverse();
   document.getElementById("table").innerHTML =
-    "<tr><th>Time</th><th>Surface °F</th><th>Mid °F</th><th>Bottom °F</th><th>RSSI</th></tr>" +
+    "<tr><th>Time</th><th>Surface °F</th><th>Mid °F</th><th>Bottom °F</th><th>Battery V</th><th>RSSI</th></tr>" +
     (recent.length ? recent.map(r => `<tr><td>${new Date(r.ts * 1000).toLocaleString()}</td><td>${fmt(r.surface_f)}</td>` +
-      `<td>${fmt(r.mid_f)}</td><td>${fmt(r.bottom_f)}</td><td>${r.rssi ?? "–"}</td></tr>`).join("")
-      : `<tr><td colspan="5" class="empty">No readings in this range</td></tr>`);
+      `<td>${fmt(r.mid_f)}</td><td>${fmt(r.bottom_f)}</td>` +
+      `<td>${r.battery_v == null ? "–" : r.battery_v.toFixed(2)}</td><td>${r.rssi ?? "–"}</td></tr>`).join("")
+      : `<tr><td colspan="6" class="empty">No readings in this range</td></tr>`);
 }
 
 function showLatest(r) {
@@ -226,17 +238,26 @@ function showLatest(r) {
   document.getElementById("v-surface").innerHTML = t(r.surface_f);
   document.getElementById("v-mid").innerHTML = t(r.mid_f);
   document.getElementById("v-bottom").innerHTML = t(r.bottom_f);
+  document.getElementById("v-batt").innerHTML = r.battery_v == null ? "–" : `${r.battery_v.toFixed(2)}<span class="unit"> V</span>`;
   document.getElementById("v-rssi").innerHTML = r.rssi ? `${r.rssi}<span class="unit"> dBm</span>` : "–";
 
+  // Worst condition decides the colour; every problem is listed.
   const missing = ["surface_f", "mid_f", "bottom_f"].filter(k => r[k] == null).length;
-  let color = css("--good"), icon = "✓", text = `Last reading ${fmtAge(r.age_s)} ago`;
+  const b = r.battery_v;
+  let level = 0;  // 0 good, 1 warning, 2 critical
+  const notes = [];
+  if (b != null && b < r.batt_low_v) { level = 2; notes.push(`battery low (${b.toFixed(2)} V) — charge it`); }
+  else if (b != null && b < r.batt_warn_v) { level = Math.max(level, 1); notes.push(`battery getting low (${b.toFixed(2)} V)`); }
+  if (missing) { level = Math.max(level, 1); notes.push(`${missing} probe(s) not reporting`); }
+  if (r.uncal) { level = Math.max(level, 1); notes.push(`${r.uncal} unknown probe(s) on the bus`); }
+  let text = `Last reading ${fmtAge(r.age_s)} ago`;
   if (r.stale) {
-    color = css("--critical"); icon = "⚠";
+    level = 2;
     text = `No reading for ${fmtAge(r.age_s)} (expected within ${r.stale_minutes} min) — check the monitor`;
-  } else if (missing || r.uncal) {
-    color = css("--warning"); icon = "⚠";
-    text += missing ? ` · ${missing} probe(s) not reporting` : ` · ${r.uncal} uncalibrated probe(s)`;
   }
+  if (notes.length) text += " · " + notes.join(" · ");
+  const color = css(["--good", "--warning", "--critical"][level]);
+  const icon = level ? "⚠" : "✓";
   status.innerHTML = `<span class="dot" style="background:${color}"></span><span>${icon} ${text}</span>`;
 }
 

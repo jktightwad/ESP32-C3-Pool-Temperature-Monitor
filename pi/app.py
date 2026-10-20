@@ -29,7 +29,13 @@ WEB_PORT = int(os.environ.get("WEB_PORT", "8090"))
 # report intervals (firmware default interval is 10 min).
 STALE_MINUTES = int(os.environ.get("STALE_MINUTES", "30"))
 
-FIELDS = ("surface_f", "mid_f", "bottom_f", "uncal", "rssi", "boot", "awake_ms")
+# Battery thresholds for the page's warning (yellow) and low (red) states.
+# Starting guesses: with the 1N5817 in the power path the ESP32 is expected to
+# brown out somewhere around 3.3-3.4 V battery; adjust once real data shows it.
+BATT_WARN_V = float(os.environ.get("BATT_WARN_V", "3.6"))
+BATT_LOW_V = float(os.environ.get("BATT_LOW_V", "3.45"))
+
+FIELDS = ("surface_f", "mid_f", "bottom_f", "uncal", "battery_v", "rssi", "boot", "awake_ms")
 
 log = logging.getLogger("pool")
 app = Flask(__name__, static_folder="static")
@@ -58,6 +64,10 @@ def init_db():
                )"""
         )
         conn.execute("CREATE INDEX IF NOT EXISTS readings_ts ON readings (ts)")
+        # Databases created before battery monitoring lack this column.
+        cols = [r[1] for r in conn.execute("PRAGMA table_info(readings)")]
+        if "battery_v" not in cols:
+            conn.execute("ALTER TABLE readings ADD COLUMN battery_v REAL")
 
 
 # --- MQTT -> SQLite --------------------------------------------------------
@@ -125,6 +135,8 @@ def api_latest():
     out["age_s"] = int(time.time()) - row["ts"]
     out["stale"] = out["age_s"] > STALE_MINUTES * 60
     out["stale_minutes"] = STALE_MINUTES
+    out["batt_warn_v"] = BATT_WARN_V
+    out["batt_low_v"] = BATT_LOW_V
     return jsonify(out)
 
 
@@ -134,7 +146,7 @@ def api_readings():
     since = int(time.time() - hours * 3600)
     with db() as conn:
         rows = conn.execute(
-            "SELECT ts, surface_f, mid_f, bottom_f, rssi FROM readings "
+            "SELECT ts, surface_f, mid_f, bottom_f, battery_v, rssi FROM readings "
             "WHERE ts >= ? ORDER BY ts",
             (since,),
         ).fetchall()
