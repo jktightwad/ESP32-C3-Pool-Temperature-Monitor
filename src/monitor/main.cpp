@@ -10,7 +10,9 @@
 //    "battery_v":3.98,"rssi":-61,"bssid":"AA:BB:CC:DD:EE:FF","boot":42,
 //    "awake_ms":2130}
 // bssid identifies which access point (e.g. mesh router vs satellite) this
-// wake connected to; null if WiFi failed.
+// wake connected to; null if WiFi failed. reset is why the chip last started:
+// "deepsleep" is a normal wake; anything else (e.g. "brownout", "poweron")
+// means a real restart, which also resets the boot counter.
 // "uncal" counts probes on the bus that aren't in KNOWN_PROBES (so have no
 // depth or offset). battery_v is read before WiFi starts, so it isn't
 // pulled down by transmit current.
@@ -38,6 +40,22 @@ static const char    *MQTT_TOPIC        = "pool/temp";
 static const char    *MQTT_CLIENT_ID    = "pool-monitor";
 
 RTC_DATA_ATTR uint32_t bootCount = 0;
+
+static const char *resetReason() {
+  switch (esp_reset_reason()) {
+    case ESP_RST_POWERON:   return "poweron";
+    case ESP_RST_EXT:       return "external";
+    case ESP_RST_SW:        return "software";
+    case ESP_RST_PANIC:     return "panic";
+    case ESP_RST_INT_WDT:   return "int_wdt";
+    case ESP_RST_TASK_WDT:  return "task_wdt";
+    case ESP_RST_WDT:       return "wdt";
+    case ESP_RST_DEEPSLEEP: return "deepsleep";
+    case ESP_RST_BROWNOUT:  return "brownout";
+    case ESP_RST_SDIO:      return "sdio";
+    default:                return "unknown";
+  }
+}
 
 WiFiClient wifiClient;
 PubSubClient mqtt(wifiClient);
@@ -97,7 +115,7 @@ static void runCycle() {
 
   while (millis() - convStart < PROBE_CONVERSION_MS) delay(5);
 
-  char payload[256];
+  char payload[288];
   size_t pos = snprintf(payload, sizeof(payload), "{");
   for (uint8_t k = 0; k < KNOWN_COUNT; k++) {
     pos = appendTemp(payload, sizeof(payload), pos, KNOWN_PROBES[k].depth,
@@ -108,8 +126,9 @@ static void runCycle() {
   char bssid[24] = "null";
   if (wifiOk) snprintf(bssid, sizeof(bssid), "\"%s\"", WiFi.BSSIDstr().c_str());
   snprintf(payload + pos, sizeof(payload) - pos,
-           ",\"uncal\":%u,\"battery_v\":%.2f,\"rssi\":%d,\"bssid\":%s,\"boot\":%lu,\"awake_ms\":%lu}",
-           unknownProbes, batteryV, wifiOk ? WiFi.RSSI() : 0, bssid, (unsigned long)bootCount,
+           ",\"uncal\":%u,\"battery_v\":%.2f,\"rssi\":%d,\"bssid\":%s,\"reset\":\"%s\",\"boot\":%lu,\"awake_ms\":%lu}",
+           unknownProbes, batteryV, wifiOk ? WiFi.RSSI() : 0, bssid, resetReason(),
+           (unsigned long)bootCount,
            (unsigned long)(millis() - cycleStart));
   Serial.println(payload);
 

@@ -35,7 +35,7 @@ STALE_MINUTES = int(os.environ.get("STALE_MINUTES", "30"))
 BATT_WARN_V = float(os.environ.get("BATT_WARN_V", "3.6"))
 BATT_LOW_V = float(os.environ.get("BATT_LOW_V", "3.45"))
 
-FIELDS = ("surface_f", "mid_f", "bottom_f", "uncal", "battery_v", "rssi", "bssid", "boot", "awake_ms")
+FIELDS = ("surface_f", "mid_f", "bottom_f", "uncal", "battery_v", "rssi", "bssid", "reset", "boot", "awake_ms")
 
 log = logging.getLogger("pool")
 app = Flask(__name__, static_folder="static")
@@ -70,6 +70,8 @@ def init_db():
             conn.execute("ALTER TABLE readings ADD COLUMN battery_v REAL")
         if "bssid" not in cols:
             conn.execute("ALTER TABLE readings ADD COLUMN bssid TEXT")
+        if "reset" not in cols:
+            conn.execute("ALTER TABLE readings ADD COLUMN reset TEXT")
 
 
 # --- MQTT -> SQLite --------------------------------------------------------
@@ -148,7 +150,7 @@ def api_readings():
     since = int(time.time() - hours * 3600)
     with db() as conn:
         rows = conn.execute(
-            "SELECT ts, surface_f, mid_f, bottom_f, battery_v, rssi, bssid FROM readings "
+            "SELECT ts, surface_f, mid_f, bottom_f, battery_v, rssi, bssid, reset, boot FROM readings "
             "WHERE ts >= ? ORDER BY ts",
             (since,),
         ).fetchall()
