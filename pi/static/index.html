@@ -169,6 +169,7 @@ function timeTicks(axis) {
 function baseOptions(yTitle) {
   return {
     responsive: true, maintainAspectRatio: false, animation: false,
+    layout: { padding: { right: 6 } },  // room for the latest-reading dot
     interaction: { mode: "index", intersect: false },
     plugins: {
       legend: { labels: { color: css("--ink-2"), boxWidth: 12, boxHeight: 3 } },
@@ -184,9 +185,20 @@ function baseOptions(yTitle) {
   };
 }
 
+// Lines draw no dots, except the latest reading and any isolated reading
+// (no neighbour on either side), which would otherwise be invisible: e.g. a
+// few readings 30 s apart on a 24 h axis are narrower than a pixel.
+function dotRadius(ctx) {
+  const d = ctx.dataset.data, i = ctx.dataIndex;
+  if (d[i] == null || d[i].y == null) return 0;
+  const has = j => j >= 0 && j < d.length && d[j].y != null;
+  return (i === d.length - 1 || (!has(i - 1) && !has(i + 1))) ? 3 : 0;
+}
+
 function line(label, data, color) {
   return { label, data, borderColor: color, backgroundColor: color, borderWidth: 2,
-           pointRadius: 0, pointHoverRadius: 4, spanGaps: false, tension: 0 };
+           pointRadius: dotRadius, pointHoverRadius: 4, spanGaps: false, tension: 0,
+           clip: false };  // don't cut the latest dot in half at the right edge
 }
 
 function draw(data) {
@@ -224,11 +236,11 @@ function draw(data) {
   const fmt = v => v == null ? "–" : v.toFixed(1);
   const recent = rows.slice(-100).reverse();
   document.getElementById("table").innerHTML =
-    "<tr><th>Time</th><th>Surface °F</th><th>Mid °F</th><th>Bottom °F</th><th>Battery V</th><th>RSSI</th></tr>" +
+    "<tr><th>Time</th><th>Surface °F</th><th>Mid °F</th><th>Bottom °F</th><th>Battery V</th><th>RSSI</th><th>Access point</th></tr>" +
     (recent.length ? recent.map(r => `<tr><td>${new Date(r.ts * 1000).toLocaleString()}</td><td>${fmt(r.surface_f)}</td>` +
       `<td>${fmt(r.mid_f)}</td><td>${fmt(r.bottom_f)}</td>` +
-      `<td>${r.battery_v == null ? "–" : r.battery_v.toFixed(2)}</td><td>${r.rssi ?? "–"}</td></tr>`).join("")
-      : `<tr><td colspan="6" class="empty">No readings in this range</td></tr>`);
+      `<td>${r.battery_v == null ? "–" : r.battery_v.toFixed(2)}</td><td>${r.rssi ?? "–"}</td><td>${r.bssid ?? "–"}</td></tr>`).join("")
+      : `<tr><td colspan="7" class="empty">No readings in this range</td></tr>`);
 }
 
 function showLatest(r) {

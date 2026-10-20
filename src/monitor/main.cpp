@@ -7,7 +7,10 @@
 // Payload on MQTT_TOPIC, temperatures in F after calibration, null if a probe
 // is missing (calibration itself is done in C, the sensor's native unit):
 //   {"surface_f":77.56,"mid_f":77.22,"bottom_f":76.89,"uncal":0,
-//    "battery_v":3.98,"rssi":-61,"boot":42,"awake_ms":2130}
+//    "battery_v":3.98,"rssi":-61,"bssid":"AA:BB:CC:DD:EE:FF","boot":42,
+//    "awake_ms":2130}
+// bssid identifies which access point (e.g. mesh router vs satellite) this
+// wake connected to; null if WiFi failed.
 // "uncal" counts probes on the bus that aren't in KNOWN_PROBES (so have no
 // depth or offset). battery_v is read before WiFi starts, so it isn't
 // pulled down by transmit current.
@@ -94,7 +97,7 @@ static void runCycle() {
 
   while (millis() - convStart < PROBE_CONVERSION_MS) delay(5);
 
-  char payload[220];
+  char payload[256];
   size_t pos = snprintf(payload, sizeof(payload), "{");
   for (uint8_t k = 0; k < KNOWN_COUNT; k++) {
     pos = appendTemp(payload, sizeof(payload), pos, KNOWN_PROBES[k].depth,
@@ -102,9 +105,11 @@ static void runCycle() {
   }
   digitalWrite(PROBE_POWER_PIN, LOW);
 
+  char bssid[24] = "null";
+  if (wifiOk) snprintf(bssid, sizeof(bssid), "\"%s\"", WiFi.BSSIDstr().c_str());
   snprintf(payload + pos, sizeof(payload) - pos,
-           ",\"uncal\":%u,\"battery_v\":%.2f,\"rssi\":%d,\"boot\":%lu,\"awake_ms\":%lu}",
-           unknownProbes, batteryV, wifiOk ? WiFi.RSSI() : 0, (unsigned long)bootCount,
+           ",\"uncal\":%u,\"battery_v\":%.2f,\"rssi\":%d,\"bssid\":%s,\"boot\":%lu,\"awake_ms\":%lu}",
+           unknownProbes, batteryV, wifiOk ? WiFi.RSSI() : 0, bssid, (unsigned long)bootCount,
            (unsigned long)(millis() - cycleStart));
   Serial.println(payload);
 
