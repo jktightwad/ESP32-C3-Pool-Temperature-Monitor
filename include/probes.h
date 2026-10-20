@@ -21,6 +21,11 @@
 #define ONEWIRE_PIN     7
 #define BATTERY_PIN     3
 #define BATTERY_DIVIDER 2.0f  // two equal resistors halve the battery voltage
+// Correction for resistor tolerance + ADC error on this build: firmware read
+// 4.11 V where a multimeter read 3.95 V (one point, near full charge).
+// Re-check at a lower battery voltage; if the error changes with voltage, a
+// single factor isn't enough and this needs a two-point correction.
+#define BATTERY_CAL     0.961f
 
 static const uint32_t PROBE_CONVERSION_MS = 750;  // DS18B20 max at 12-bit
 
@@ -110,5 +115,5 @@ inline float readCalibratedC(uint8_t k) {
 inline float readBatteryV() {
   uint32_t mv = 0;
   for (uint8_t i = 0; i < 16; i++) mv += analogReadMilliVolts(BATTERY_PIN);
-  return (mv / 16.0f) * BATTERY_DIVIDER / 1000.0f;
+  return (mv / 16.0f) * BATTERY_DIVIDER * BATTERY_CAL / 1000.0f;
 }
