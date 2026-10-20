@@ -121,7 +121,8 @@ browser (`http://piserver.local:8090` may also work; plain `piserver` didn't
 resolve from the PC on this network). Reserve the Pi's IP on the router: the
 ESP32's `MQTT_HOST` depends on it too.
 
-Updating later: `cd ~/ESP32-C3-Pool-Temperature-Monitor && git pull`, then
+Updating: automatic once section 5 is set up; manually it's
+`cd ~/ESP32-C3-Pool-Temperature-Monitor && git pull`, then
 `sudo systemctl restart pool-monitor`.
 
 ### What the page shows
@@ -152,6 +153,30 @@ systemctl is-active pool-temp-mdns
 `pool-temp-mdns.service` contains the Pi's Ethernet IP (192.168.1.86); if
 that ever changes, edit it and restart the service. Then open
 `http://pool-temp.local:8090`.
+
+## 5. Automatic updates
+
+`pool-monitor-update.timer` runs `pi/auto-update.sh` 5 minutes after boot and
+every 15 minutes after that. It fetches from GitHub and fast-forwards the
+clone (it never overwrites local edits; it fails instead). If anything under
+`pi/` changed it re-installs changed unit files and restarts `pool-monitor`;
+firmware-only changes are pulled without a restart.
+
+One-time setup:
+
+```bash
+cd ~/ESP32-C3-Pool-Temperature-Monitor && git pull
+sudo cp pi/pool-monitor-update.service pi/pool-monitor-update.timer /etc/systemd/system/
+sudo systemctl daemon-reload
+sudo systemctl enable --now pool-monitor-update.timer
+```
+
+Check it:
+
+```bash
+systemctl list-timers pool-monitor-update.timer    # next/last run
+journalctl -u pool-monitor-update -n 20 --no-pager # what it did
+```
 
 ## Troubleshooting
 
