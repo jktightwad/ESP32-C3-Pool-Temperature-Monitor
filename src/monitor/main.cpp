@@ -12,7 +12,8 @@
 // bssid identifies which access point (e.g. mesh router vs satellite) this
 // wake connected to; null if WiFi failed. reset is why the chip last started:
 // "deepsleep" is a normal wake; anything else (e.g. "brownout", "poweron")
-// means a real restart, which also resets the boot counter.
+// means a real restart, which also resets the boot counter. fw is the git
+// commit this firmware was built from (see scripts/version.py).
 // "uncal" counts probes on the bus that aren't in KNOWN_PROBES (so have no
 // depth or offset). battery_v is read before WiFi starts, so it isn't
 // pulled down by transmit current.
@@ -38,6 +39,10 @@
 static const uint32_t WIFI_ATTEMPT_MS   = 8000;   // per attempt, 2 attempts
 static const char    *MQTT_TOPIC        = "pool/temp";
 static const char    *MQTT_CLIENT_ID    = "pool-monitor";
+
+#ifndef FW_VERSION
+#define FW_VERSION "unknown"
+#endif
 
 RTC_DATA_ATTR uint32_t bootCount = 0;
 
@@ -98,7 +103,7 @@ static size_t appendTemp(char *buf, size_t len, size_t pos, const char *key, flo
 static void runCycle() {
   uint32_t cycleStart = millis();
   bootCount++;
-  Serial.printf("\nCycle %lu\n", (unsigned long)bootCount);
+  Serial.printf("\nCycle %lu, firmware %s\n", (unsigned long)bootCount, FW_VERSION);
 
   float batteryV = readBatteryV();
   Serial.printf("Battery %.2f V\n", batteryV);
@@ -115,7 +120,7 @@ static void runCycle() {
 
   while (millis() - convStart < PROBE_CONVERSION_MS) delay(5);
 
-  char payload[288];
+  char payload[320];
   size_t pos = snprintf(payload, sizeof(payload), "{");
   for (uint8_t k = 0; k < KNOWN_COUNT; k++) {
     pos = appendTemp(payload, sizeof(payload), pos, KNOWN_PROBES[k].depth,
@@ -126,8 +131,8 @@ static void runCycle() {
   char bssid[24] = "null";
   if (wifiOk) snprintf(bssid, sizeof(bssid), "\"%s\"", WiFi.BSSIDstr().c_str());
   snprintf(payload + pos, sizeof(payload) - pos,
-           ",\"uncal\":%u,\"battery_v\":%.2f,\"rssi\":%d,\"bssid\":%s,\"reset\":\"%s\",\"boot\":%lu,\"awake_ms\":%lu}",
-           unknownProbes, batteryV, wifiOk ? WiFi.RSSI() : 0, bssid, resetReason(),
+           ",\"uncal\":%u,\"battery_v\":%.2f,\"rssi\":%d,\"bssid\":%s,\"reset\":\"%s\",\"fw\":\"%s\",\"boot\":%lu,\"awake_ms\":%lu}",
+           unknownProbes, batteryV, wifiOk ? WiFi.RSSI() : 0, bssid, resetReason(), FW_VERSION,
            (unsigned long)bootCount,
            (unsigned long)(millis() - cycleStart));
   Serial.println(payload);

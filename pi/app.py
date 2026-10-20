@@ -12,7 +12,9 @@ Settings come from environment variables (see pool-monitor.env.example).
 import json
 import logging
 import os
+import re
 import sqlite3
+import subprocess
 import time
 
 import paho.mqtt.client as mqtt
@@ -35,9 +37,16 @@ STALE_MINUTES = int(os.environ.get("STALE_MINUTES", "30"))
 BATT_WARN_V = float(os.environ.get("BATT_WARN_V", "3.6"))
 BATT_LOW_V = float(os.environ.get("BATT_LOW_V", "3.45"))
 
-FIELDS = ("surface_f", "mid_f", "bottom_f", "uncal", "battery_v", "rssi", "bssid", "reset", "boot", "awake_ms")
+FIELDS = ("surface_f", "mid_f", "bottom_f", "uncal", "battery_v", "rssi", "bssid", "reset", "fw", "boot", "awake_ms")
 
 log = logging.getLogger("pool")
+
+# The git checkout this app runs from (the repo root, one level above pi/).
+REPO_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+# Firmware versions already checked since this process started, so a version
+# that can't be resolved (e.g. built from commits never pushed) is only acted
+# on once per restart instead of on every reading.
+_checked_fw = set()
 app = Flask(__name__, static_folder="static")
 
 
@@ -72,6 +81,8 @@ def init_db():
             conn.execute("ALTER TABLE readings ADD COLUMN bssid TEXT")
         if "reset" not in cols:
             conn.execute("ALTER TABLE readings ADD COLUMN reset TEXT")
+        if "fw" not in cols:
+            conn.execute("ALTER TABLE readings ADD COLUMN fw TEXT")
 
 
 # --- MQTT -> SQLite --------------------------------------------------------
@@ -104,6 +115,35 @@ def on_message(client, userdata, msg):
             row,
         )
     log.info("Stored %s", raw)
+    check_fw_version(data.get("fw"))
+
+
+def check_fw_version(fw):
+    """If the ESP32 runs firmware built from a commit this checkout doesn't
+    include yet, start the update service (git pull + restart)."""
+    if not fw or fw in _checked_fw:
+        return
+    _checked_fw.add(fw)
+    commit = fw.split("-")[0]  # drop "-dirty"
+    if not re.fullmatch(r"[0-9a-f]{7,40}", commit):
+        return
+    # Exit 0: commit is already part of HEAD. 1: known but not merged.
+    # 128: unknown commit (not fetched yet). Either non-zero means we're behind.
+    result = subprocess.run(
+        ["git", "-C", REPO_DIR, "merge-base", "--is-ancestor", commit, "HEAD"],
+        capture_output=True,
+    )
+    if result.returncode == 0:
+        return
+    log.info("Firmware %s is newer than this checkout; starting update", fw)
+    # --no-block: the update restarts this service, so don't wait on it.
+    # Allowed without a password by /etc/sudoers.d/pool-monitor-update.
+    started = subprocess.run(
+        ["sudo", "-n", "systemctl", "start", "--no-block", "pool-monitor-update.service"],
+        capture_output=True, text=True,
+    )
+    if started.returncode != 0:
+        log.warning("Couldn't start pool-monitor-update: %s", started.stderr.strip())
 
 
 def start_mqtt():
@@ -150,7 +190,7 @@ def api_readings():
     since = int(time.time() - hours * 3600)
     with db() as conn:
         rows = conn.execute(
-            "SELECT ts, surface_f, mid_f, bottom_f, battery_v, rssi, bssid, reset, boot FROM readings "
+            "SELECT ts, surface_f, mid_f, bottom_f, battery_v, rssi, bssid, reset, fw, boot FROM readings "
             "WHERE ts >= ? ORDER BY ts",
             (since,),
         ).fetchall()

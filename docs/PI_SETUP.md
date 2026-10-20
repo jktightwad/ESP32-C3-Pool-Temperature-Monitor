@@ -171,6 +171,22 @@ sudo systemctl daemon-reload
 sudo systemctl enable --now pool-monitor-update.timer
 ```
 
+### Update when the ESP32 runs newer firmware
+
+Every firmware build is stamped with the git commit it came from (`fw` in
+each reading, shown on the page). When a reading arrives with a commit this
+Pi's checkout doesn't include yet, `app.py` starts the same update
+immediately instead of waiting for the timer. It needs permission to start
+that one service, nothing else:
+
+```bash
+sudo install -m 440 pi/pool-monitor-update.sudoers /etc/sudoers.d/pool-monitor-update
+sudo visudo -c                                     # must report "parsed OK"
+```
+
+A firmware built from commits that were never pushed can't be resolved; the
+Pi tries once, logs it, and carries on.
+
 Check it:
 
 ```bash

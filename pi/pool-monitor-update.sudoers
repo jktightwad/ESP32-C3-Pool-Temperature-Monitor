@@ -1,0 +1,6 @@
+# Lets the pool web service (user pi) start the updater when the ESP32
+# reports newer firmware. Nothing else is allowed. systemctl is in /usr/bin or
+# /bin depending on how the Pi was installed, so both paths are listed.
+# Install: sudo install -m 440 pi/pool-monitor-update.sudoers /etc/sudoers.d/pool-monitor-update
+pi ALL=(root) NOPASSWD: /usr/bin/systemctl start --no-block pool-monitor-update.service
+pi ALL=(root) NOPASSWD: /bin/systemctl start --no-block pool-monitor-update.service
