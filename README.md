@@ -39,16 +39,18 @@ bar's `env:` selector):
 | GPIO / pin | Use | Notes |
 |------|-----|-------|
 | 4 | Probe power (3.3 V) | All probe VCC; switched off between readings |
-| 7 | 1-Wire data | All three probes on one bus; one adapter board's 4.7 kΩ pull-up |
+| 7 | 1-Wire bus: pool | Surface, mid, bottom probes; one adapter board's 4.7 kΩ pull-up |
+| 10 | 1-Wire bus: solar | Solar heater outlet probe on its own adapter board (all four on one bus failed) |
 | 3 | Battery voltage | TP4056 OUT+ → 100 kΩ → GPIO3 → 100 kΩ → GND, 100 nF GPIO3–GND |
 | 5V | Power in | TP4056 OUT+ → 1N5817 (stripe toward 5V) → 5V pin |
 | GND | Ground | TP4056 OUT−, probes, divider |
 | 5, 6 | Not used | Found no probes on the first board; cause not identified |
 | 8 | Onboard LED | Assumed active-low, not verified; strapping pin |
 
-Each probe's depth comes from its ROM address (`KNOWN_PROBES` in
-`include/probes.h`, which also holds its calibration offset). A new probe shows
-as "unknown" until its address is added there.
+Each probe's name (surface / mid / bottom / solar) comes from its ROM address
+(`KNOWN_PROBES` in `include/probes.h`, which also holds its calibration
+offset), so it doesn't matter which bus a probe is on. A new probe shows as
+"unknown" until its address is added there.
 
 Power: 18650 → TP4056 (4-pad, protected) → 1N5817 → SuperMini 5V. Charge via
 the TP4056's USB-C; the diode stops the SuperMini's own USB-C from feeding the

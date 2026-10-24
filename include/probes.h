@@ -1,15 +1,18 @@
 // Probe wiring, calibration table and helpers shared by probe_test and the
 // monitor firmware.
 //
-// All DS18B20 probes share one 1-Wire bus. Each probe's depth comes from its
-// ROM address in KNOWN_PROBES[], which also holds its calibration offset. A
-// probe that isn't in the table still reads, but is reported as unknown (no
-// depth, no offset) until its address is added.
+// DS18B20 probes sit on one or more 1-Wire buses (BUS_PINS). Each probe's
+// name comes from its ROM address in KNOWN_PROBES[], which also holds its
+// calibration offset, so it doesn't matter which bus a probe is on. A probe
+// that isn't in the table still reads, but is reported as unknown (no name,
+// no offset) until its address is added.
 //
-// Wiring (one adapter board, whose 4.7k pull-up serves the whole bus):
+// Wiring (each bus has one adapter board, whose 4.7k pull-up serves it):
 //   all probe VCC  -> GPIO4 (3.3 V when on -- never 5 V, see README)
 //   all probe GND  -> GND
-//   all probe DATA -> ONEWIRE_PIN
+//   GPIO7  bus: surface, mid, bottom (pool probes)
+//   GPIO10 bus: solar heater outlet (all four on one bus failed; long
+//               star-wired cables are the suspected cause)
 // Battery: TP4056 OUT+ -- 100k -- GPIO3 -- 100k -- GND (100 nF GPIO3-GND)
 #pragma once
 
@@ -18,7 +21,6 @@
 #include <DallasTemperature.h>
 
 #define PROBE_POWER_PIN 4
-#define ONEWIRE_PIN     7
 #define BATTERY_PIN     3
 #define BATTERY_DIVIDER 2.0f  // two equal resistors halve the battery voltage
 // Correction for resistor tolerance + ADC error on this build: firmware read
@@ -48,11 +50,17 @@ static const KnownProbe KNOWN_PROBES[] = {
 };
 static const uint8_t KNOWN_COUNT = sizeof(KNOWN_PROBES) / sizeof(KNOWN_PROBES[0]);
 
-static OneWire oneWire(ONEWIRE_PIN);
-static DallasTemperature sensors(&oneWire);
+static OneWire wire7(7);
+static OneWire wire10(10);
+static DallasTemperature bus7(&wire7);
+static DallasTemperature bus10(&wire10);
+static DallasTemperature *const BUSES[] = { &bus7, &bus10 };
+static const uint8_t BUS_PINS[] = { 7, 10 };
+static const uint8_t BUS_COUNT = sizeof(BUSES) / sizeof(BUSES[0]);
 
-// Which known probes were found on the last scan, and how many unknown ones.
-static bool probePresent[KNOWN_COUNT];
+// Which bus each known probe was found on in the last scan (-1 = not found),
+// and how many unknown probes were seen.
+static int8_t probeBus[KNOWN_COUNT];
 static uint8_t unknownProbes = 0;
 
 inline void printAddress(const DeviceAddress a) {
@@ -61,49 +69,54 @@ inline void printAddress(const DeviceAddress a) {
   }
 }
 
-// Scans the bus, matches each probe to KNOWN_PROBES and prints what it found.
-// Returns the number of devices on the bus.
+// Scans every bus, matches each probe to KNOWN_PROBES and prints what it
+// found. Returns the total number of devices across all buses.
 inline uint8_t scanProbes() {
-  sensors.begin();
-  sensors.setWaitForConversion(false);  // start conversion, then wait once
-  sensors.setResolution(12);
-  for (uint8_t k = 0; k < KNOWN_COUNT; k++) probePresent[k] = false;
+  for (uint8_t k = 0; k < KNOWN_COUNT; k++) probeBus[k] = -1;
   unknownProbes = 0;
+  uint8_t total = 0;
 
-  uint8_t count = sensors.getDeviceCount();
-  for (uint8_t i = 0; i < count; i++) {
-    DeviceAddress a;
-    if (!sensors.getAddress(a, i)) continue;
-    int match = -1;
-    for (uint8_t k = 0; k < KNOWN_COUNT; k++) {
-      if (memcmp(a, KNOWN_PROBES[k].addr, sizeof(DeviceAddress)) == 0) match = k;
-    }
-    Serial.print("Probe { ");
-    printAddress(a);
-    if (match >= 0) {
-      probePresent[match] = true;
-      Serial.printf(" }  %s, offset %+.3f C\n", KNOWN_PROBES[match].depth,
-                    KNOWN_PROBES[match].offsetC);
-    } else {
-      unknownProbes++;
-      Serial.println(" }  UNKNOWN (add to KNOWN_PROBES with its depth)");
+  for (uint8_t b = 0; b < BUS_COUNT; b++) {
+    DallasTemperature &bus = *BUSES[b];
+    bus.begin();
+    bus.setWaitForConversion(false);  // start conversions, then wait once
+    bus.setResolution(12);
+    uint8_t count = bus.getDeviceCount();
+    total += count;
+    for (uint8_t i = 0; i < count; i++) {
+      DeviceAddress a;
+      if (!bus.getAddress(a, i)) continue;
+      int match = -1;
+      for (uint8_t k = 0; k < KNOWN_COUNT; k++) {
+        if (memcmp(a, KNOWN_PROBES[k].addr, sizeof(DeviceAddress)) == 0) match = k;
+      }
+      Serial.printf("GPIO%u probe { ", BUS_PINS[b]);
+      printAddress(a);
+      if (match >= 0) {
+        probeBus[match] = b;
+        Serial.printf(" }  %s, offset %+.3f C\n", KNOWN_PROBES[match].depth,
+                      KNOWN_PROBES[match].offsetC);
+      } else {
+        unknownProbes++;
+        Serial.println(" }  UNKNOWN (add to KNOWN_PROBES with its name)");
+      }
     }
   }
   for (uint8_t k = 0; k < KNOWN_COUNT; k++) {
-    if (!probePresent[k]) Serial.printf("Probe %s NOT FOUND\n", KNOWN_PROBES[k].depth);
+    if (probeBus[k] < 0) Serial.printf("Probe %s NOT FOUND\n", KNOWN_PROBES[k].depth);
   }
-  return count;
+  return total;
 }
 
-// Starts a conversion on every probe on the bus (non-blocking).
+// Starts a conversion on every probe on every bus (non-blocking).
 inline void requestAllProbes() {
-  sensors.requestTemperatures();
+  for (uint8_t b = 0; b < BUS_COUNT; b++) BUSES[b]->requestTemperatures();
 }
 
 // Raw reading of known probe k in C, or DEVICE_DISCONNECTED_C.
 inline float readRawC(uint8_t k) {
-  if (!probePresent[k]) return DEVICE_DISCONNECTED_C;
-  return sensors.getTempC(KNOWN_PROBES[k].addr);
+  if (probeBus[k] < 0) return DEVICE_DISCONNECTED_C;
+  return BUSES[probeBus[k]]->getTempC(KNOWN_PROBES[k].addr);
 }
 
 // Calibrated reading of known probe k in C, or DEVICE_DISCONNECTED_C.

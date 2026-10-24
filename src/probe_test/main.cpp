@@ -24,7 +24,7 @@ void loop() {
   requestAllProbes();
   delay(PROBE_CONVERSION_MS);
 
-  Serial.printf("%u device(s) on GPIO%d |", count, ONEWIRE_PIN);
+  Serial.printf("%u device(s) |", count);
   for (uint8_t k = 0; k < KNOWN_COUNT; k++) {
     float raw = readRawC(k);
     if (raw == DEVICE_DISCONNECTED_C) {
