@@ -37,7 +37,7 @@ STALE_MINUTES = int(os.environ.get("STALE_MINUTES", "30"))
 BATT_WARN_V = float(os.environ.get("BATT_WARN_V", "3.6"))
 BATT_LOW_V = float(os.environ.get("BATT_LOW_V", "3.45"))
 
-FIELDS = ("surface_f", "mid_f", "bottom_f", "uncal", "battery_v", "rssi", "bssid", "reset", "fw", "boot", "awake_ms")
+FIELDS = ("surface_f", "mid_f", "bottom_f", "solar_f", "uncal", "battery_v", "rssi", "bssid", "reset", "fw", "boot", "awake_ms")
 
 log = logging.getLogger("pool")
 
@@ -83,6 +83,8 @@ def init_db():
             conn.execute("ALTER TABLE readings ADD COLUMN reset TEXT")
         if "fw" not in cols:
             conn.execute("ALTER TABLE readings ADD COLUMN fw TEXT")
+        if "solar_f" not in cols:
+            conn.execute("ALTER TABLE readings ADD COLUMN solar_f REAL")
 
 
 # --- MQTT -> SQLite --------------------------------------------------------
@@ -181,6 +183,14 @@ def api_latest():
     out["stale_minutes"] = STALE_MINUTES
     out["batt_warn_v"] = BATT_WARN_V
     out["batt_low_v"] = BATT_LOW_V
+    # Probes the firmware reported but couldn't read (key present, value
+    # null). Uses the raw payload so a probe the firmware doesn't know about
+    # yet (e.g. older firmware without solar) isn't counted as missing.
+    try:
+        payload = json.loads(row["raw"])
+    except (TypeError, ValueError):
+        payload = {}
+    out["missing"] = [k[:-2] for k, v in payload.items() if k.endswith("_f") and v is None]
     return jsonify(out)
 
 
@@ -190,7 +200,7 @@ def api_readings():
     since = int(time.time() - hours * 3600)
     with db() as conn:
         rows = conn.execute(
-            "SELECT ts, surface_f, mid_f, bottom_f, battery_v, rssi, bssid, reset, fw, boot FROM readings "
+            "SELECT ts, surface_f, mid_f, bottom_f, solar_f, battery_v, rssi, bssid, reset, fw, boot FROM readings "
             "WHERE ts >= ? ORDER BY ts",
             (since,),
         ).fetchall()
