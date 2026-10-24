@@ -120,7 +120,7 @@ static void runCycle() {
 
   while (millis() - convStart < PROBE_CONVERSION_MS) delay(5);
 
-  char payload[320];
+  char payload[384];
   size_t pos = snprintf(payload, sizeof(payload), "{");
   for (uint8_t k = 0; k < KNOWN_COUNT; k++) {
     pos = appendTemp(payload, sizeof(payload), pos, KNOWN_PROBES[k].depth,
@@ -139,6 +139,9 @@ static void runCycle() {
 
   if (wifiOk) {
     mqtt.setServer(MQTT_HOST, MQTT_PORT);
+    // Default 256-byte packet limit is close to the worst-case payload (~234
+    // bytes with 4 probes); publish() fails silently past it.
+    mqtt.setBufferSize(512);
     if (mqtt.connect(MQTT_CLIENT_ID, MQTT_USER, MQTT_PASSWORD)) {
       bool sent = mqtt.publish(MQTT_TOPIC, payload, true);  // retained
       mqtt.loop();
