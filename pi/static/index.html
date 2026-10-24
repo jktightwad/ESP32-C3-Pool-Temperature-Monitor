@@ -94,6 +94,7 @@
   </div>
 
   <div class="controls" role="group" aria-label="Time range">
+    <button data-hours="4" aria-pressed="false">4 h</button>
     <button data-hours="24" aria-pressed="true">24 h</button>
     <button data-hours="168" aria-pressed="false">7 days</button>
     <button data-hours="720" aria-pressed="false">30 days</button>
@@ -134,6 +135,7 @@ let tempChart, solarChart, battChart, rssiChart;
 // Tick labels: time of day for 24 h, date for longer ranges.
 const fmtTick = ms => {
   const d = new Date(ms);
+  if (hours <= 4) return d.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
   return hours <= 24 ? d.toLocaleTimeString([], { hour: "numeric" })
                      : d.toLocaleDateString([], { month: "short", day: "numeric" });
 };
@@ -158,14 +160,15 @@ function series(rows, key, gapS) {
   return pts;
 }
 
-// Ticks on whole local hours/days: every 4 h for 24 h, daily for 7 days,
-// every 5 days for 30 days.
+// Ticks on whole local times: every 30 min for 4 h, every 4 h for 24 h,
+// daily for 7 days, every 5 days for 30 days.
 function timeTicks(axis) {
   const H = 3600e3, D = 24 * H;
-  const step = hours <= 24 ? 4 * H : hours <= 168 ? D : 5 * D;
+  const step = hours <= 4 ? H / 2 : hours <= 24 ? 4 * H : hours <= 168 ? D : 5 * D;
   const t = new Date(axis.min);
   t.setMinutes(0, 0, 0);
-  if (step >= D) t.setHours(0); else t.setHours(Math.ceil(t.getHours() / 4) * 4);
+  if (step >= D) t.setHours(0);
+  else if (step >= H) t.setHours(Math.floor(t.getHours() / (step / H)) * (step / H));
   const ticks = [];
   for (let v = t.getTime(); v <= axis.max; v += step) if (v >= axis.min) ticks.push({ value: v });
   axis.ticks = ticks;
