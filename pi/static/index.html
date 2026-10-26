@@ -75,7 +75,16 @@
   table { width: 100%; border-collapse: collapse; font-variant-numeric: tabular-nums; margin-top: 8px; font-size: 0.9rem; }
   th, td { text-align: right; padding: 4px 8px; border-bottom: 1px solid var(--grid); }
   th:first-child, td:first-child { text-align: left; }
-  .table-wrap { overflow-x: auto; }
+  .table-wrap { overflow: auto; max-height: 420px; margin-top: 8px; }
+  .table-wrap th { position: sticky; top: 0; background: var(--page); }
+  .nav { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; margin-bottom: 12px; }
+  .nav button, .more {
+    font: inherit; color: var(--ink); background: var(--surface);
+    border: 1px solid var(--border); border-radius: 6px; padding: 4px 12px; cursor: pointer;
+  }
+  .nav button:disabled { color: var(--muted); cursor: default; }
+  .nav .range { color: var(--ink-2); }
+  .more { margin-top: 8px; }
   .empty { color: var(--muted); padding: 24px 0; text-align: center; }
 </style>
 </head>
@@ -94,10 +103,16 @@
   </div>
 
   <div class="controls" role="group" aria-label="Time range">
-    <button data-hours="4" aria-pressed="false">4 h</button>
-    <button data-hours="24" aria-pressed="true">24 h</button>
+    <button data-hours="4" aria-pressed="true">4 h</button>
+    <button data-hours="24" aria-pressed="false">24 h</button>
     <button data-hours="168" aria-pressed="false">7 days</button>
     <button data-hours="720" aria-pressed="false">30 days</button>
+  </div>
+  <div class="nav" role="group" aria-label="Move through time">
+    <button id="earlier">◀ Earlier</button>
+    <button id="later" disabled>Later ▶</button>
+    <button id="now" disabled>Now</button>
+    <span class="range" id="range"></span>
   </div>
 
   <div class="stack">
@@ -122,6 +137,7 @@
   <details>
     <summary>Table view</summary>
     <div class="table-wrap"><table id="table"></table></div>
+    <button class="more" id="more" hidden></button>
   </details>
 </main>
 
@@ -129,7 +145,14 @@
 <script src="/static/chart.umd.js"></script>
 <script>
 const css = name => getComputedStyle(document.documentElement).getPropertyValue(name).trim();
-let hours = 24;
+let hours = 4;
+// How many windows back from now the charts show (0 = ending now).
+let back = 0;
+// Table rows shown (newest first); "Show more" adds TABLE_STEP.
+const TABLE_STEP = 100;
+let tableLimit = TABLE_STEP;
+let lastRows = [];
+const windowEnd = () => Date.now() - back * hours * 3600e3;
 let tempChart, solarChart, battChart, rssiChart;
 
 // Tick labels: time of day for 24 h, date for longer ranges.
@@ -200,7 +223,8 @@ function dotRadius(ctx) {
   const d = ctx.dataset.data, i = ctx.dataIndex;
   if (d[i] == null || d[i].y == null) return 0;
   const has = j => j >= 0 && j < d.length && d[j].y != null;
-  return (i === d.length - 1 || (!has(i - 1) && !has(i + 1))) ? 3 : 0;
+  // "Latest" only means something when the window ends now.
+  return ((i === d.length - 1 && back === 0) || (!has(i - 1) && !has(i + 1))) ? 3 : 0;
 }
 
 function line(label, data, color) {
@@ -211,8 +235,8 @@ function line(label, data, color) {
 
 function draw(data) {
   const rows = data.rows, gap = data.gap_s;
-  // Always show the whole selected range, ending now.
-  const xMax = Date.now(), xMin = xMax - hours * 3600e3;
+  // Always show the whole selected window, even where there's no data.
+  const xMax = windowEnd(), xMin = xMax - hours * 3600e3;
   const temp = [
     line("Surface", series(rows, "surface_f", gap), css("--series-1")),
     line("Mid", series(rows, "mid_f", gap), css("--series-2")),
@@ -246,8 +270,23 @@ function draw(data) {
     c.update();
   }
 
+  lastRows = rows;
+  renderTable();
+  const opts = { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" };
+  document.getElementById("range").textContent =
+    `${new Date(xMin).toLocaleString([], opts)} – ${new Date(xMax).toLocaleString([], opts)}`;
+  document.getElementById("later").disabled = back === 0;
+  document.getElementById("now").disabled = back === 0;
+}
+
+function renderTable() {
   const fmt = v => v == null ? "–" : v.toFixed(1);
-  const recent = rows.slice(-100).reverse();
+  const rows = lastRows;
+  const recent = rows.slice(-tableLimit).reverse();
+  const more = document.getElementById("more");
+  const remaining = rows.length - recent.length;
+  more.hidden = remaining <= 0;
+  more.textContent = `Show ${Math.min(TABLE_STEP, remaining)} more (${remaining} older in this window)`;
   document.getElementById("table").innerHTML =
     "<tr><th>Time</th><th>Surface °F</th><th>Mid °F</th><th>Bottom °F</th><th>Solar °F</th><th>Battery V</th><th>RSSI</th><th>Access point</th><th>Boot</th><th>Missed</th><th>Interval s</th><th>Reset</th><th>Firmware</th></tr>" +
     (recent.length ? recent.map(r => `<tr><td>${new Date(r.ts * 1000).toLocaleString()}</td><td>${fmt(r.surface_f)}</td>` +
@@ -297,9 +336,10 @@ function showLatest(r) {
 
 async function refresh() {
   try {
+    const end = Math.floor(windowEnd() / 1000);
     const [latest, readings] = await Promise.all([
       fetch("/api/latest").then(r => r.json()),
-      fetch(`/api/readings?hours=${hours}`).then(r => r.json()),
+      fetch(`/api/readings?hours=${hours}&end=${end}`).then(r => r.json()),
     ]);
     showLatest(latest);
     draw(readings);
@@ -310,9 +350,16 @@ async function refresh() {
 
 document.querySelectorAll(".controls button").forEach(b => b.addEventListener("click", () => {
   hours = Number(b.dataset.hours);
+  back = 0;
+  tableLimit = TABLE_STEP;
   document.querySelectorAll(".controls button").forEach(x => x.setAttribute("aria-pressed", x === b));
   refresh();
 }));
+const step = delta => { back = Math.max(0, back + delta); tableLimit = TABLE_STEP; refresh(); };
+document.getElementById("earlier").addEventListener("click", () => step(1));
+document.getElementById("later").addEventListener("click", () => step(-1));
+document.getElementById("now").addEventListener("click", () => step(-back));
+document.getElementById("more").addEventListener("click", () => { tableLimit += TABLE_STEP; renderTable(); });
 
 refresh();
 setInterval(refresh, 60000);

@@ -327,12 +327,14 @@ def api_latest():
 @app.route("/api/readings")
 def api_readings():
     hours = min(max(request.args.get("hours", 24, type=float), 1), 24 * 366)
-    since = int(time.time() - hours * 3600)
+    # Window end (unix time); default now. Lets the page step back in time.
+    end = request.args.get("end", time.time(), type=float)
+    since = int(end - hours * 3600)
     with db() as conn:
         rows = conn.execute(
             "SELECT ts, surface_f, mid_f, bottom_f, solar_f, battery_v, rssi, bssid, reset, fw, boot, missed, interval FROM readings "
-            "WHERE ts >= ? ORDER BY ts",
-            (since,),
+            "WHERE ts >= ? AND ts <= ? ORDER BY ts",
+            (since, int(end)),
         ).fetchall()
     return jsonify({
         "gap_s": STALE_MINUTES * 60,  # break lines across gaps longer than this
