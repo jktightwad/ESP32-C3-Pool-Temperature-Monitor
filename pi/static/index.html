@@ -50,7 +50,7 @@
   h2 { font-size: 0.95rem; margin: 0 0 8px; color: var(--ink-2); font-weight: 600; }
   .status { color: var(--ink-2); margin-bottom: 16px; display: flex; align-items: center; gap: 6px; }
   .status .dot { width: 10px; height: 10px; border-radius: 50%; flex: none; }
-  .tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 12px; margin-bottom: 16px; }
+  .tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(118px, 1fr)); gap: 12px; margin-bottom: 16px; }
   .card {
     background: var(--surface);
     border: 1px solid var(--border);
@@ -59,7 +59,7 @@
   }
   .tile .label { color: var(--ink-2); font-size: 0.85rem; display: flex; align-items: center; gap: 6px; }
   .tile .swatch { width: 12px; height: 3px; border-radius: 2px; }
-  .tile .value { font-size: 2rem; font-weight: 600; font-variant-numeric: tabular-nums; }
+  .tile .value { font-size: 1.75rem; font-weight: 600; font-variant-numeric: tabular-nums; white-space: nowrap; }
   .tile .unit { font-size: 1rem; color: var(--ink-2); font-weight: 400; }
   .controls { display: flex; gap: 6px; margin-bottom: 12px; flex-wrap: wrap; }
   .controls button {
@@ -85,6 +85,7 @@
   .nav button:disabled { color: var(--muted); cursor: default; }
   .nav .range { color: var(--ink-2); }
   .more { margin-top: 8px; }
+  .note { color: var(--muted); font-size: 0.85rem; margin: -4px 0 8px; }
   .empty { color: var(--muted); padding: 24px 0; text-align: center; }
 </style>
 </head>
@@ -97,7 +98,8 @@
     <div class="card tile"><div class="label"><span class="swatch" style="background:var(--series-1)"></span>Surface</div><div class="value" id="v-surface">–</div></div>
     <div class="card tile"><div class="label"><span class="swatch" style="background:var(--series-2)"></span>Mid</div><div class="value" id="v-mid">–</div></div>
     <div class="card tile"><div class="label"><span class="swatch" style="background:var(--series-3)"></span>Bottom</div><div class="value" id="v-bottom">–</div></div>
-    <div class="card tile"><div class="label">Solar heater out</div><div class="value" id="v-solar">–</div></div>
+    <div class="card tile"><div class="label">Solar out</div><div class="value" id="v-solar">–</div></div>
+    <div class="card tile"><div class="label">Solar gain</div><div class="value" id="v-gain">–</div></div>
     <div class="card tile"><div class="label">Battery</div><div class="value" id="v-batt">–</div></div>
     <div class="card tile"><div class="label">WiFi signal</div><div class="value" id="v-rssi">–</div></div>
   </div>
@@ -123,6 +125,12 @@
     <div class="card">
       <h2>Solar heater outlet (°F)</h2>
       <div class="chart small"><canvas id="solarChart" aria-label="Solar heater outlet temperature over time"></canvas></div>
+    </div>
+    <div class="card">
+      <h2>Solar gain (°F, outlet minus pool)</h2>
+      <p class="note">Above 0 the mat is adding heat; below 0 it's cooling the pool. Pool = average of the
+        surface, mid and bottom probes. Only meaningful while the pump is running.</p>
+      <div class="chart small"><canvas id="gainChart" aria-label="Solar outlet minus pool temperature over time"></canvas></div>
     </div>
     <div class="card">
       <h2>Battery (V)</h2>
@@ -153,7 +161,7 @@ const TABLE_STEP = 100;
 let tableLimit = TABLE_STEP;
 let lastRows = [];
 const windowEnd = () => Date.now() - back * hours * 3600e3;
-let tempChart, solarChart, battChart, rssiChart;
+let tempChart, solarChart, gainChart, battChart, rssiChart;
 
 // Tick labels: time of day for 24 h, date for longer ranges.
 const fmtTick = ms => {
@@ -171,6 +179,13 @@ const fmtTime = ms => {
 };
 const fmtAge = s => s < 90 ? `${s} s` : s < 5400 ? `${Math.round(s / 60)} min` :
   s < 172800 ? `${Math.round(s / 3600)} h` : `${Math.round(s / 86400)} days`;
+
+// Solar outlet minus the average of the pool probes that reported, or null.
+function solarGain(r) {
+  const pool = [r.surface_f, r.mid_f, r.bottom_f].filter(v => v != null);
+  if (r.solar_f == null || !pool.length) return null;
+  return r.solar_f - pool.reduce((a, b) => a + b, 0) / pool.length;
+}
 
 // Points as {x: ms, y}, with a null inserted wherever readings stop for longer
 // than gap_s so the line breaks instead of bridging missing data.
@@ -243,6 +258,8 @@ function draw(data) {
     line("Bottom", series(rows, "bottom_f", gap), css("--series-3")),
   ];
   const solar = [line("Solar", series(rows, "solar_f", gap), css("--ink-2"))];
+  rows.forEach(r => { r.gain_f = solarGain(r); });
+  const gain = [line("Solar gain", series(rows, "gain_f", gap), css("--ink-2"))];
   const batt = [line("Battery", series(rows, "battery_v", gap), css("--ink-2"))];
   const rssi = [line("RSSI", series(rows, "rssi", gap), css("--ink-2"))];
 
@@ -252,6 +269,16 @@ function draw(data) {
     const so = baseOptions("°F");
     so.plugins.legend.display = false;
     solarChart = new Chart(document.getElementById("solarChart"), { type: "line", data: { datasets: solar }, options: so });
+    // Gain: keep 0 on the axis and draw it darker, since the sign is the point.
+    const go = baseOptions("°F");
+    go.plugins.legend.display = false;
+    go.scales.y.suggestedMin = -1;
+    go.scales.y.suggestedMax = 1;
+    go.scales.y.grid = {
+      color: ctx => ctx.tick && ctx.tick.value === 0 ? css("--ink-2") : css("--grid"),
+      lineWidth: ctx => ctx.tick && ctx.tick.value === 0 ? 1.5 : 1,
+    };
+    gainChart = new Chart(document.getElementById("gainChart"), { type: "line", data: { datasets: gain }, options: go });
     const bo = baseOptions("V");
     bo.plugins.legend.display = false;
     battChart = new Chart(document.getElementById("battChart"), { type: "line", data: { datasets: batt }, options: bo });
@@ -261,10 +288,11 @@ function draw(data) {
   } else {
     tempChart.data.datasets = temp;
     solarChart.data.datasets = solar;
+    gainChart.data.datasets = gain;
     battChart.data.datasets = batt;
     rssiChart.data.datasets = rssi;
   }
-  for (const c of [tempChart, solarChart, battChart, rssiChart]) {
+  for (const c of [tempChart, solarChart, gainChart, battChart, rssiChart]) {
     c.options.scales.x.min = xMin;
     c.options.scales.x.max = xMax;
     c.update();
@@ -303,6 +331,9 @@ function showLatest(r) {
   document.getElementById("v-mid").innerHTML = t(r.mid_f);
   document.getElementById("v-bottom").innerHTML = t(r.bottom_f);
   document.getElementById("v-solar").innerHTML = t(r.solar_f);
+  const g = solarGain(r);
+  document.getElementById("v-gain").innerHTML =
+    g == null ? "–" : `${g >= 0 ? "+" : "−"}${Math.abs(g).toFixed(1)}<span class="unit"> °F</span>`;
   document.getElementById("v-batt").innerHTML = r.battery_v == null ? "–" : `${r.battery_v.toFixed(2)}<span class="unit"> V</span>`;
   document.getElementById("v-rssi").innerHTML = r.rssi ? `${r.rssi}<span class="unit"> dBm</span>` : "–";
 
