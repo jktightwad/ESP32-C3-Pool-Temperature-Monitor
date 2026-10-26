@@ -55,7 +55,7 @@ FIRMWARE_META = os.path.join(FIRMWARE_DIR, "firmware.json")
 # The default 4 MB partition table gives each app slot 1.25 MB (0x140000).
 FIRMWARE_MAX_BYTES = 0x140000
 
-FIELDS = ("surface_f", "mid_f", "bottom_f", "solar_f", "uncal", "battery_v", "rssi", "bssid", "reset", "fw", "boot", "missed", "interval", "ota_fail", "awake_ms")
+FIELDS = ("surface_f", "mid_f", "bottom_f", "solar_f", "uncal", "battery_v", "rssi", "bssid", "reset", "fw", "boot", "missed", "last_fail", "probes", "interval", "ota_fail", "awake_ms")
 
 log = logging.getLogger("pool")
 
@@ -103,9 +103,11 @@ def init_db():
             conn.execute("ALTER TABLE readings ADD COLUMN fw TEXT")
         if "solar_f" not in cols:
             conn.execute("ALTER TABLE readings ADD COLUMN solar_f REAL")
-        for col in ("missed", "interval", "ota_fail"):
+        for col in ("missed", "interval", "ota_fail", "probes"):
             if col not in cols:
                 conn.execute("ALTER TABLE readings ADD COLUMN %s INTEGER" % col)
+        if "last_fail" not in cols:
+            conn.execute("ALTER TABLE readings ADD COLUMN last_fail TEXT")
 
 
 # --- MQTT -> SQLite --------------------------------------------------------
@@ -332,7 +334,7 @@ def api_readings():
     since = int(end - hours * 3600)
     with db() as conn:
         rows = conn.execute(
-            "SELECT ts, surface_f, mid_f, bottom_f, solar_f, battery_v, rssi, bssid, reset, fw, boot, missed, interval FROM readings "
+            "SELECT ts, surface_f, mid_f, bottom_f, solar_f, battery_v, rssi, bssid, reset, fw, boot, missed, last_fail, probes, interval FROM readings "
             "WHERE ts >= ? AND ts <= ? ORDER BY ts",
             (since, int(end)),
         ).fetchall()

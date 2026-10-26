@@ -15,7 +15,11 @@
 // means a real restart, which also resets the boot counter. fw is the git
 // commit this firmware was built from (see scripts/version.py). missed is how
 // many cycles since the last successful publish failed to send; interval is
-// the sleep time in effect (set by the Pi via pool/interval).
+// the sleep time in effect (set by the Pi via pool/interval). last_fail is
+// why the most recent missed cycle failed: "wifi<status>" (WiFi never
+// connected; Arduino wl_status_t code), "mqtt<state>" (broker connect failed;
+// PubSubClient state code) or "pub" (publish failed); "" if none. probes is
+// how many devices the scan found on all 1-Wire buses.
 // "uncal" counts probes on the bus that aren't in KNOWN_PROBES (so have no
 // depth or offset). battery_v is read before WiFi starts, so it isn't
 // pulled down by transmit current. ota_fail counts failed attempts to install
@@ -66,6 +70,10 @@ RTC_DATA_ATTR uint32_t bootCount = 0;
 // Boot count of the last cycle that published, to report how many cycles in
 // between failed to (WiFi or MQTT); 0 = none published since power-up.
 RTC_DATA_ATTR uint32_t lastPublishedBoot = 0;
+// Why the most recent failed cycle didn't publish ("wifi<status>",
+// "mqtt<state>" or "pub"); reported in the next successful reading, then
+// cleared. Empty = no failure since the last report.
+RTC_DATA_ATTR char lastFail[16] = "";
 // Current interval; kept across deep sleep, updated from the Pi.
 RTC_DATA_ATTR uint32_t intervalS = REPORT_INTERVAL_S;
 static uint32_t receivedIntervalS = 0;
@@ -194,7 +202,7 @@ static void runCycle() {
   // Probes: power up, scan the bus, start conversions
   digitalWrite(PROBE_POWER_PIN, HIGH);
   delay(50);
-  scanProbes();
+  uint8_t probesFound = scanProbes();
   requestAllProbes();
   uint32_t convStart = millis();
 
@@ -203,7 +211,7 @@ static void runCycle() {
 
   while (millis() - convStart < PROBE_CONVERSION_MS) delay(5);
 
-  char payload[384];
+  char payload[448];
   size_t pos = snprintf(payload, sizeof(payload), "{");
   for (uint8_t k = 0; k < KNOWN_COUNT; k++) {
     pos = appendTemp(payload, sizeof(payload), pos, KNOWN_PROBES[k].depth,
@@ -219,9 +227,11 @@ static void runCycle() {
   if (wifiOk) snprintf(bssid, sizeof(bssid), "\"%s\"", WiFi.BSSIDstr().c_str());
   snprintf(payload + pos, sizeof(payload) - pos,
            ",\"uncal\":%u,\"battery_v\":%.2f,\"rssi\":%d,\"bssid\":%s,\"reset\":\"%s\",\"fw\":\"%s\","
-           "\"boot\":%lu,\"missed\":%lu,\"interval\":%lu,\"ota_fail\":%u,\"awake_ms\":%lu}",
+           "\"boot\":%lu,\"missed\":%lu,\"last_fail\":\"%s\",\"probes\":%u,\"interval\":%lu,"
+           "\"ota_fail\":%u,\"awake_ms\":%lu}",
            unknownProbes, batteryV, wifiOk ? WiFi.RSSI() : 0, bssid, resetReason(), FW_VERSION,
-           (unsigned long)bootCount, (unsigned long)missed, (unsigned long)intervalS, otaFailCount,
+           (unsigned long)bootCount, (unsigned long)missed, lastFail, probesFound,
+           (unsigned long)intervalS, otaFailCount,
            (unsigned long)(millis() - cycleStart));
   Serial.println(payload);
 
@@ -232,7 +242,12 @@ static void runCycle() {
     mqtt.setBufferSize(512);
     if (mqtt.connect(MQTT_CLIENT_ID, MQTT_USER, MQTT_PASSWORD)) {
       bool sent = mqtt.publish(MQTT_TOPIC, payload, true);  // retained
-      if (sent) lastPublishedBoot = bootCount;
+      if (sent) {
+        lastPublishedBoot = bootCount;
+        lastFail[0] = '\0';  // reported in this payload
+      } else {
+        strcpy(lastFail, "pub");
+      }
       Serial.printf("MQTT publish %s\n", sent ? "OK" : "FAILED");
 
       // The Pi keeps the interval and the OTA offer as retained messages, so
@@ -261,7 +276,10 @@ static void runCycle() {
       maybeUpdateFirmware(batteryV);
     } else {
       Serial.printf("MQTT connect FAILED (state %d)\n", mqtt.state());
+      snprintf(lastFail, sizeof(lastFail), "mqtt%d", mqtt.state());
     }
+  } else {
+    snprintf(lastFail, sizeof(lastFail), "wifi%d", (int)WiFi.status());
   }
 
   WiFi.disconnect(true);
