@@ -135,6 +135,21 @@ Updating: automatic once section 5 is set up; manually it's
   where readings are missing instead of joining across the gap
 - A table view of the most recent readings
 
+### Reporting schedule (day/night)
+
+The Pi tells the ESP32 how long to sleep: it keeps a retained message on
+`pool/interval`, and the ESP32 reads it on every wake. Defaults: every 60 s
+from 08:00 to 19:00 (Pi local time), every 600 s otherwise. Change them in
+`/etc/pool-monitor.env` (`DAY_START`, `DAY_END`, `DAY_INTERVAL_S`,
+`NIGHT_INTERVAL_S`; 15-3600 s) and `sudo systemctl restart pool-monitor`; no
+reflash needed. The ESP32 picks up a change on its next wake, so a switch
+from night to day takes effect up to one night interval later.
+
+Each reading also carries `missed`: cycles since the last successful publish
+that failed to send. If `boot` jumps by more than `missed` + 1, the reading
+was sent but the Pi didn't store it (e.g. it arrived while the service was
+restarting).
+
 ## 4. Friendly name: http://pool-temp.local:8090
 
 Publishes the extra mDNS name `pool-temp.local` for the Pi (the Pi keeps its

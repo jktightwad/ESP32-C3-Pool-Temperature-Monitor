@@ -249,11 +249,11 @@ function draw(data) {
   const fmt = v => v == null ? "–" : v.toFixed(1);
   const recent = rows.slice(-100).reverse();
   document.getElementById("table").innerHTML =
-    "<tr><th>Time</th><th>Surface °F</th><th>Mid °F</th><th>Bottom °F</th><th>Solar °F</th><th>Battery V</th><th>RSSI</th><th>Access point</th><th>Boot</th><th>Reset</th><th>Firmware</th></tr>" +
+    "<tr><th>Time</th><th>Surface °F</th><th>Mid °F</th><th>Bottom °F</th><th>Solar °F</th><th>Battery V</th><th>RSSI</th><th>Access point</th><th>Boot</th><th>Missed</th><th>Interval s</th><th>Reset</th><th>Firmware</th></tr>" +
     (recent.length ? recent.map(r => `<tr><td>${new Date(r.ts * 1000).toLocaleString()}</td><td>${fmt(r.surface_f)}</td>` +
       `<td>${fmt(r.mid_f)}</td><td>${fmt(r.bottom_f)}</td><td>${fmt(r.solar_f)}</td>` +
-      `<td>${r.battery_v == null ? "–" : r.battery_v.toFixed(2)}</td><td>${r.rssi ?? "–"}</td><td>${r.bssid ?? "–"}</td><td>${r.boot ?? "–"}</td><td>${r.reset ?? "–"}</td><td>${r.fw ?? "–"}</td></tr>`).join("")
-      : `<tr><td colspan="11" class="empty">No readings in this range</td></tr>`);
+      `<td>${r.battery_v == null ? "–" : r.battery_v.toFixed(2)}</td><td>${r.rssi ?? "–"}</td><td>${r.bssid ?? "–"}</td><td>${r.boot ?? "–"}</td><td>${r.missed ?? "–"}</td><td>${r.interval ?? "–"}</td><td>${r.reset ?? "–"}</td><td>${r.fw ?? "–"}</td></tr>`).join("")
+      : `<tr><td colspan="13" class="empty">No readings in this range</td></tr>`);
 }
 
 function showLatest(r) {
@@ -282,6 +282,8 @@ function showLatest(r) {
     text = `No reading for ${fmtAge(r.age_s)} (expected within ${r.stale_minutes} min) — check the monitor`;
   }
   if (notes.length) text += " · " + notes.join(" · ");
+  if (r.missed) text += ` · ${r.missed} reading(s) missed before this one`;
+  if (r.schedule) text += ` · ${r.schedule.mode}: every ${r.schedule.interval} s`;
   if (r.fw) text += ` · firmware ${r.fw}`;
   const color = css(["--good", "--warning", "--critical"][level]);
   const icon = level ? "⚠" : "✓";

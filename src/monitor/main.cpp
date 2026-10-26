@@ -13,7 +13,9 @@
 // wake connected to; null if WiFi failed. reset is why the chip last started:
 // "deepsleep" is a normal wake; anything else (e.g. "brownout", "poweron")
 // means a real restart, which also resets the boot counter. fw is the git
-// commit this firmware was built from (see scripts/version.py).
+// commit this firmware was built from (see scripts/version.py). missed is how
+// many cycles since the last successful publish failed to send; interval is
+// the sleep time in effect (set by the Pi via pool/interval).
 // "uncal" counts probes on the bus that aren't in KNOWN_PROBES (so have no
 // depth or offset). battery_v is read before WiFi starts, so it isn't
 // pulled down by transmit current.
@@ -32,10 +34,15 @@
 #ifndef DEBUG_NO_DEEP_SLEEP
 #define DEBUG_NO_DEEP_SLEEP 1
 #endif
-// Seconds between readings.
+// Seconds between readings until the Pi sends one (fallback only: the Pi's
+// retained message on MQTT_INTERVAL_TOPIC sets the day/night schedule).
 #ifndef REPORT_INTERVAL_S
 #define REPORT_INTERVAL_S 600
 #endif
+static const char    *MQTT_INTERVAL_TOPIC = "pool/interval";
+static const uint32_t MIN_INTERVAL_S      = 15;    // ignore values outside
+static const uint32_t MAX_INTERVAL_S      = 3600;  // this range
+static const uint32_t INTERVAL_WAIT_MS    = 500;   // wait for the retained msg
 static const uint32_t WIFI_ATTEMPT_MS   = 8000;   // per attempt, 2 attempts
 static const char    *MQTT_TOPIC        = "pool/temp";
 static const char    *MQTT_CLIENT_ID    = "pool-monitor";
@@ -45,6 +52,20 @@ static const char    *MQTT_CLIENT_ID    = "pool-monitor";
 #endif
 
 RTC_DATA_ATTR uint32_t bootCount = 0;
+// Boot count of the last cycle that published, to report how many cycles in
+// between failed to (WiFi or MQTT); 0 = none published since power-up.
+RTC_DATA_ATTR uint32_t lastPublishedBoot = 0;
+// Current interval; kept across deep sleep, updated from the Pi.
+RTC_DATA_ATTR uint32_t intervalS = REPORT_INTERVAL_S;
+static uint32_t receivedIntervalS = 0;
+
+static void onMqttMessage(char *topic, byte *payload, unsigned int len) {
+  char buf[12];
+  len = len < sizeof(buf) - 1 ? len : sizeof(buf) - 1;
+  memcpy(buf, payload, len);
+  buf[len] = '\0';
+  receivedIntervalS = strtoul(buf, nullptr, 10);
+}
 
 static const char *resetReason() {
   switch (esp_reset_reason()) {
@@ -128,12 +149,17 @@ static void runCycle() {
   }
   digitalWrite(PROBE_POWER_PIN, LOW);
 
+  // Cycles since the last successful publish that didn't get through.
+  uint32_t missed = (lastPublishedBoot > 0 && bootCount > lastPublishedBoot)
+                        ? bootCount - lastPublishedBoot - 1 : 0;
+
   char bssid[24] = "null";
   if (wifiOk) snprintf(bssid, sizeof(bssid), "\"%s\"", WiFi.BSSIDstr().c_str());
   snprintf(payload + pos, sizeof(payload) - pos,
-           ",\"uncal\":%u,\"battery_v\":%.2f,\"rssi\":%d,\"bssid\":%s,\"reset\":\"%s\",\"fw\":\"%s\",\"boot\":%lu,\"awake_ms\":%lu}",
+           ",\"uncal\":%u,\"battery_v\":%.2f,\"rssi\":%d,\"bssid\":%s,\"reset\":\"%s\",\"fw\":\"%s\","
+           "\"boot\":%lu,\"missed\":%lu,\"interval\":%lu,\"awake_ms\":%lu}",
            unknownProbes, batteryV, wifiOk ? WiFi.RSSI() : 0, bssid, resetReason(), FW_VERSION,
-           (unsigned long)bootCount,
+           (unsigned long)bootCount, (unsigned long)missed, (unsigned long)intervalS,
            (unsigned long)(millis() - cycleStart));
   Serial.println(payload);
 
@@ -144,10 +170,29 @@ static void runCycle() {
     mqtt.setBufferSize(512);
     if (mqtt.connect(MQTT_CLIENT_ID, MQTT_USER, MQTT_PASSWORD)) {
       bool sent = mqtt.publish(MQTT_TOPIC, payload, true);  // retained
+      if (sent) lastPublishedBoot = bootCount;
+      Serial.printf("MQTT publish %s\n", sent ? "OK" : "FAILED");
+
+      // The Pi keeps the interval as a retained message, so the broker sends
+      // it straight after subscribing.
+      receivedIntervalS = 0;
+      mqtt.setCallback(onMqttMessage);
+      mqtt.subscribe(MQTT_INTERVAL_TOPIC);
+      uint32_t waitStart = millis();
+      while (!receivedIntervalS && millis() - waitStart < INTERVAL_WAIT_MS) {
+        mqtt.loop();
+        delay(10);
+      }
+      if (receivedIntervalS >= MIN_INTERVAL_S && receivedIntervalS <= MAX_INTERVAL_S) {
+        intervalS = receivedIntervalS;
+        Serial.printf("Interval from Pi: %lu s\n", (unsigned long)intervalS);
+      } else {
+        Serial.printf("No valid interval from Pi; keeping %lu s\n", (unsigned long)intervalS);
+      }
+
       mqtt.loop();
       delay(50);  // let the TCP stack send before disconnecting
       mqtt.disconnect();
-      Serial.printf("MQTT publish %s\n", sent ? "OK" : "FAILED");
     } else {
       Serial.printf("MQTT connect FAILED (state %d)\n", mqtt.state());
     }
@@ -167,7 +212,7 @@ void setup() {
 #if !DEBUG_NO_DEEP_SLEEP
   runCycle();
   Serial.flush();
-  esp_sleep_enable_timer_wakeup((uint64_t)REPORT_INTERVAL_S * 1000000ULL);
+  esp_sleep_enable_timer_wakeup((uint64_t)intervalS * 1000000ULL);
   esp_deep_sleep_start();
 #endif
 }
@@ -175,6 +220,6 @@ void setup() {
 void loop() {
   // Only reached with DEBUG_NO_DEEP_SLEEP; otherwise setup() ends in deep sleep.
   runCycle();
-  Serial.printf("Waiting %lu s\n", (unsigned long)REPORT_INTERVAL_S);
-  delay((uint32_t)REPORT_INTERVAL_S * 1000UL);
+  Serial.printf("Waiting %lu s\n", (unsigned long)intervalS);
+  delay(intervalS * 1000UL);
 }

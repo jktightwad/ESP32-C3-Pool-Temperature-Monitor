@@ -15,6 +15,7 @@ import os
 import re
 import sqlite3
 import subprocess
+import threading
 import time
 
 import paho.mqtt.client as mqtt
@@ -37,7 +38,15 @@ STALE_MINUTES = int(os.environ.get("STALE_MINUTES", "30"))
 BATT_WARN_V = float(os.environ.get("BATT_WARN_V", "3.6"))
 BATT_LOW_V = float(os.environ.get("BATT_LOW_V", "3.45"))
 
-FIELDS = ("surface_f", "mid_f", "bottom_f", "solar_f", "uncal", "battery_v", "rssi", "bssid", "reset", "fw", "boot", "awake_ms")
+# Reporting schedule sent to the ESP32 (retained on INTERVAL_TOPIC; the
+# ESP32 reads it on every wake). Day = DAY_START <= local time < DAY_END.
+INTERVAL_TOPIC = os.environ.get("INTERVAL_TOPIC", "pool/interval")
+DAY_START = os.environ.get("DAY_START", "08:00")
+DAY_END = os.environ.get("DAY_END", "19:00")
+DAY_INTERVAL_S = int(os.environ.get("DAY_INTERVAL_S", "60"))
+NIGHT_INTERVAL_S = int(os.environ.get("NIGHT_INTERVAL_S", "600"))
+
+FIELDS = ("surface_f", "mid_f", "bottom_f", "solar_f", "uncal", "battery_v", "rssi", "bssid", "reset", "fw", "boot", "missed", "interval", "awake_ms")
 
 log = logging.getLogger("pool")
 
@@ -85,6 +94,9 @@ def init_db():
             conn.execute("ALTER TABLE readings ADD COLUMN fw TEXT")
         if "solar_f" not in cols:
             conn.execute("ALTER TABLE readings ADD COLUMN solar_f REAL")
+        for col in ("missed", "interval"):
+            if col not in cols:
+                conn.execute("ALTER TABLE readings ADD COLUMN %s INTEGER" % col)
 
 
 # --- MQTT -> SQLite --------------------------------------------------------
@@ -148,6 +160,34 @@ def check_fw_version(fw):
         log.warning("Couldn't start pool-monitor-update: %s", started.stderr.strip())
 
 
+def _minutes(hhmm):
+    h, m = hhmm.split(":")
+    return int(h) * 60 + int(m)
+
+
+def current_schedule(now=None):
+    """(interval_s, "day"|"night") for the given local time (default now)."""
+    t = time.localtime(now)
+    minute = t.tm_hour * 60 + t.tm_min
+    if _minutes(DAY_START) <= minute < _minutes(DAY_END):
+        return DAY_INTERVAL_S, "day"
+    return NIGHT_INTERVAL_S, "night"
+
+
+def publish_schedule_forever(client):
+    """Keeps the retained interval message in line with the time of day.
+    Re-publishes every minute; the broker just replaces the retained value."""
+    last = None
+    while True:
+        interval, mode = current_schedule()
+        if client.is_connected():
+            client.publish(INTERVAL_TOPIC, str(interval), qos=1, retain=True)
+            if interval != last:
+                log.info("Schedule: %s, reporting every %d s", mode, interval)
+                last = interval
+        time.sleep(60)
+
+
 def start_mqtt():
     # paho-mqtt 2.x requires a callback API version; 1.x (Raspbian bullseye's
     # python3-paho-mqtt) doesn't have the argument.
@@ -161,6 +201,7 @@ def start_mqtt():
     client.reconnect_delay_set(min_delay=1, max_delay=60)
     client.connect_async(MQTT_HOST, MQTT_PORT, keepalive=60)
     client.loop_start()  # background thread, reconnects automatically
+    threading.Thread(target=publish_schedule_forever, args=(client,), daemon=True).start()
     return client
 
 
@@ -191,6 +232,8 @@ def api_latest():
     except (TypeError, ValueError):
         payload = {}
     out["missing"] = [k[:-2] for k, v in payload.items() if k.endswith("_f") and v is None]
+    interval, mode = current_schedule()
+    out["schedule"] = {"interval": interval, "mode": mode}
     return jsonify(out)
 
 
@@ -200,7 +243,7 @@ def api_readings():
     since = int(time.time() - hours * 3600)
     with db() as conn:
         rows = conn.execute(
-            "SELECT ts, surface_f, mid_f, bottom_f, solar_f, battery_v, rssi, bssid, reset, fw, boot FROM readings "
+            "SELECT ts, surface_f, mid_f, bottom_f, solar_f, battery_v, rssi, bssid, reset, fw, boot, missed, interval FROM readings "
             "WHERE ts >= ? ORDER BY ts",
             (since,),
         ).fetchall()
