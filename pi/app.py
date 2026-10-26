@@ -9,6 +9,7 @@ One process does both jobs:
 Settings come from environment variables (see pool-monitor.env.example).
 """
 
+import hashlib
 import json
 import logging
 import os
@@ -19,7 +20,7 @@ import threading
 import time
 
 import paho.mqtt.client as mqtt
-from flask import Flask, jsonify, request, send_from_directory
+from flask import Flask, abort, jsonify, request, send_file, send_from_directory
 
 MQTT_HOST = os.environ.get("MQTT_HOST", "localhost")
 MQTT_PORT = int(os.environ.get("MQTT_PORT", "1883"))
@@ -46,7 +47,15 @@ DAY_END = os.environ.get("DAY_END", "19:00")
 DAY_INTERVAL_S = int(os.environ.get("DAY_INTERVAL_S", "60"))
 NIGHT_INTERVAL_S = int(os.environ.get("NIGHT_INTERVAL_S", "600"))
 
-FIELDS = ("surface_f", "mid_f", "bottom_f", "solar_f", "uncal", "battery_v", "rssi", "bssid", "reset", "fw", "boot", "missed", "interval", "awake_ms")
+# OTA firmware offered to the ESP32 (uploaded from the PC by env:ota).
+OTA_TOPIC = os.environ.get("OTA_TOPIC", "pool/ota")
+FIRMWARE_DIR = os.environ.get("FIRMWARE_DIR", os.path.join(os.path.dirname(os.path.abspath(__file__)), "firmware"))
+FIRMWARE_BIN = os.path.join(FIRMWARE_DIR, "firmware.bin")
+FIRMWARE_META = os.path.join(FIRMWARE_DIR, "firmware.json")
+# The default 4 MB partition table gives each app slot 1.25 MB (0x140000).
+FIRMWARE_MAX_BYTES = 0x140000
+
+FIELDS = ("surface_f", "mid_f", "bottom_f", "solar_f", "uncal", "battery_v", "rssi", "bssid", "reset", "fw", "boot", "missed", "interval", "ota_fail", "awake_ms")
 
 log = logging.getLogger("pool")
 
@@ -94,7 +103,7 @@ def init_db():
             conn.execute("ALTER TABLE readings ADD COLUMN fw TEXT")
         if "solar_f" not in cols:
             conn.execute("ALTER TABLE readings ADD COLUMN solar_f REAL")
-        for col in ("missed", "interval"):
+        for col in ("missed", "interval", "ota_fail"):
             if col not in cols:
                 conn.execute("ALTER TABLE readings ADD COLUMN %s INTEGER" % col)
 
@@ -105,6 +114,7 @@ def on_connect(client, userdata, flags, rc, *args):
     if rc == 0:
         log.info("MQTT connected to %s:%s, subscribing to %s", MQTT_HOST, MQTT_PORT, MQTT_TOPIC)
         client.subscribe(MQTT_TOPIC)
+        publish_ota_offer(client)
     else:
         log.error("MQTT connect failed, rc=%s", rc)
 
@@ -188,6 +198,22 @@ def publish_schedule_forever(client):
         time.sleep(60)
 
 
+def firmware_meta():
+    try:
+        with open(FIRMWARE_META) as f:
+            return json.load(f)
+    except (OSError, ValueError):
+        return None
+
+
+def publish_ota_offer(client):
+    """Retained "<version> <url>" for the ESP32 to check on each wake, or
+    "none" so it doesn't wait for a message that will never come."""
+    meta = firmware_meta()
+    offer = "%s %s" % (meta["version"], meta["url"]) if meta else "none"
+    client.publish(OTA_TOPIC, offer, qos=1, retain=True)
+
+
 def start_mqtt():
     # paho-mqtt 2.x requires a callback API version; 1.x (Raspbian bullseye's
     # python3-paho-mqtt) doesn't have the argument.
@@ -202,10 +228,69 @@ def start_mqtt():
     client.connect_async(MQTT_HOST, MQTT_PORT, keepalive=60)
     client.loop_start()  # background thread, reconnects automatically
     threading.Thread(target=publish_schedule_forever, args=(client,), daemon=True).start()
+    global mqtt_client
+    mqtt_client = client
     return client
 
 
+mqtt_client = None
+
+
 # --- Web -------------------------------------------------------------------
+
+def _authorized():
+    auth = request.authorization
+    return bool(auth and auth.username == MQTT_USER and auth.password == MQTT_PASSWORD)
+
+
+@app.route("/api/firmware", methods=["POST"])
+def api_firmware_upload():
+    """Receives firmware from the PC (scripts/ota_upload.py) and offers it to
+    the ESP32. Same login as MQTT."""
+    if not _authorized():
+        return "Login required (MQTT user/password)\n", 401
+    version = request.headers.get("X-Firmware-Version", "").strip()
+    if not re.fullmatch(r"[0-9A-Za-z._-]{1,47}", version):
+        return "Missing or invalid X-Firmware-Version\n", 400
+    data = request.get_data()
+    # ESP32 app images start with magic byte 0xE9.
+    if not data or data[0] != 0xE9:
+        return "Not an ESP32 firmware image\n", 400
+    if len(data) > FIRMWARE_MAX_BYTES:
+        return "Firmware is %d bytes; app slot holds %d\n" % (len(data), FIRMWARE_MAX_BYTES), 400
+
+    os.makedirs(FIRMWARE_DIR, exist_ok=True)
+    tmp = FIRMWARE_BIN + ".tmp"
+    with open(tmp, "wb") as f:
+        f.write(data)
+    os.replace(tmp, FIRMWARE_BIN)
+    meta = {
+        "version": version,
+        "md5": hashlib.md5(data).hexdigest(),
+        "size": len(data),
+        "uploaded": int(time.time()),
+        # The ESP32 downloads from the same address the PC uploaded to.
+        "url": "http://%s/firmware.bin" % request.host,
+    }
+    with open(FIRMWARE_META + ".tmp", "w") as f:
+        json.dump(meta, f)
+    os.replace(FIRMWARE_META + ".tmp", FIRMWARE_META)
+    if mqtt_client is not None:
+        publish_ota_offer(mqtt_client)
+    log.info("Firmware %s uploaded (%d bytes); offered on %s", version, len(data), OTA_TOPIC)
+    return "Firmware %s stored (%d bytes) and offered to the ESP32\n" % (version, len(data))
+
+
+@app.route("/firmware.bin")
+def firmware_download():
+    meta = firmware_meta()
+    if meta is None or not os.path.exists(FIRMWARE_BIN):
+        abort(404)
+    resp = send_file(FIRMWARE_BIN, mimetype="application/octet-stream")
+    # HTTPUpdate on the ESP32 verifies the download against this.
+    resp.headers["x-MD5"] = meta["md5"]
+    return resp
+
 
 @app.route("/")
 def index():
@@ -234,6 +319,8 @@ def api_latest():
     out["missing"] = [k[:-2] for k, v in payload.items() if k.endswith("_f") and v is None]
     interval, mode = current_schedule()
     out["schedule"] = {"interval": interval, "mode": mode}
+    meta = firmware_meta()
+    out["ota_version"] = meta["version"] if meta else None
     return jsonify(out)
 
 

@@ -18,11 +18,19 @@
 // the sleep time in effect (set by the Pi via pool/interval).
 // "uncal" counts probes on the bus that aren't in KNOWN_PROBES (so have no
 // depth or offset). battery_v is read before WiFi starts, so it isn't
-// pulled down by transmit current.
+// pulled down by transmit current. ota_fail counts failed attempts to install
+// the firmware the Pi is offering.
+//
+// OTA: the Pi keeps a retained "<version> <url>" on pool/ota (or "none").
+// After publishing, if that version differs from FW_VERSION and the battery
+// is high enough, the firmware is downloaded into the other app slot and the
+// chip restarts into it. A failed download leaves the running firmware in
+// place; after OTA_MAX_FAILS failures the same version isn't retried.
 
 #include <Arduino.h>
 #include <WiFi.h>
 #include <PubSubClient.h>
+#include <HTTPUpdate.h>
 #include "secrets.h"
 #include "probes.h"
 
@@ -43,6 +51,9 @@ static const char    *MQTT_INTERVAL_TOPIC = "pool/interval";
 static const uint32_t MIN_INTERVAL_S      = 15;    // ignore values outside
 static const uint32_t MAX_INTERVAL_S      = 3600;  // this range
 static const uint32_t INTERVAL_WAIT_MS    = 500;   // wait for the retained msg
+static const char    *MQTT_OTA_TOPIC      = "pool/ota";
+static const float    OTA_MIN_BATTERY_V   = 3.6f;
+static const uint8_t  OTA_MAX_FAILS       = 3;
 static const uint32_t WIFI_ATTEMPT_MS   = 8000;   // per attempt, 2 attempts
 static const char    *MQTT_TOPIC        = "pool/temp";
 static const char    *MQTT_CLIENT_ID    = "pool-monitor";
@@ -58,13 +69,64 @@ RTC_DATA_ATTR uint32_t lastPublishedBoot = 0;
 // Current interval; kept across deep sleep, updated from the Pi.
 RTC_DATA_ATTR uint32_t intervalS = REPORT_INTERVAL_S;
 static uint32_t receivedIntervalS = 0;
+// Last OTA offer from the Pi this wake: "<version> <url>" or "none".
+static char otaOffer[200];
+static bool otaReceived = false;
+// Version that failed to install, and how many times, kept across sleep.
+RTC_DATA_ATTR char otaFailedVersion[48] = "";
+RTC_DATA_ATTR uint8_t otaFailCount = 0;
 
 static void onMqttMessage(char *topic, byte *payload, unsigned int len) {
+  if (strcmp(topic, MQTT_OTA_TOPIC) == 0) {
+    len = len < sizeof(otaOffer) - 1 ? len : sizeof(otaOffer) - 1;
+    memcpy(otaOffer, payload, len);
+    otaOffer[len] = '\0';
+    otaReceived = true;
+    return;
+  }
   char buf[12];
   len = len < sizeof(buf) - 1 ? len : sizeof(buf) - 1;
   memcpy(buf, payload, len);
   buf[len] = '\0';
   receivedIntervalS = strtoul(buf, nullptr, 10);
+}
+
+// Installs the firmware the Pi offers, if it's a different version. Only
+// returns if there's nothing to do or the update failed; on success the chip
+// restarts into the new firmware.
+static void maybeUpdateFirmware(float batteryV) {
+  if (!otaReceived) return;
+  char *space = strchr(otaOffer, ' ');
+  if (!space) return;  // "none" or malformed
+  *space = '\0';
+  const char *version = otaOffer;
+  const char *url = space + 1;
+  if (strcmp(version, FW_VERSION) == 0) return;
+  if (strcmp(version, otaFailedVersion) == 0 && otaFailCount >= OTA_MAX_FAILS) {
+    Serial.printf("OTA %s failed %u times; not retrying\n", version, otaFailCount);
+    return;
+  }
+  if (batteryV < OTA_MIN_BATTERY_V) {
+    Serial.printf("OTA %s waiting: battery %.2f V < %.2f V\n", version, batteryV, OTA_MIN_BATTERY_V);
+    return;
+  }
+
+  Serial.printf("OTA: updating %s -> %s from %s\n", FW_VERSION, version, url);
+  WiFiClient client;
+  httpUpdate.rebootOnUpdate(false);
+  t_httpUpdate_return result = httpUpdate.update(client, url);
+  if (result == HTTP_UPDATE_OK) {
+    Serial.println("OTA OK, restarting");
+    Serial.flush();
+    ESP.restart();
+  }
+  Serial.printf("OTA FAILED: %s\n", httpUpdate.getLastErrorString().c_str());
+  if (strcmp(version, otaFailedVersion) != 0) {
+    strncpy(otaFailedVersion, version, sizeof(otaFailedVersion) - 1);
+    otaFailedVersion[sizeof(otaFailedVersion) - 1] = '\0';
+    otaFailCount = 0;
+  }
+  otaFailCount++;
 }
 
 static const char *resetReason() {
@@ -157,9 +219,9 @@ static void runCycle() {
   if (wifiOk) snprintf(bssid, sizeof(bssid), "\"%s\"", WiFi.BSSIDstr().c_str());
   snprintf(payload + pos, sizeof(payload) - pos,
            ",\"uncal\":%u,\"battery_v\":%.2f,\"rssi\":%d,\"bssid\":%s,\"reset\":\"%s\",\"fw\":\"%s\","
-           "\"boot\":%lu,\"missed\":%lu,\"interval\":%lu,\"awake_ms\":%lu}",
+           "\"boot\":%lu,\"missed\":%lu,\"interval\":%lu,\"ota_fail\":%u,\"awake_ms\":%lu}",
            unknownProbes, batteryV, wifiOk ? WiFi.RSSI() : 0, bssid, resetReason(), FW_VERSION,
-           (unsigned long)bootCount, (unsigned long)missed, (unsigned long)intervalS,
+           (unsigned long)bootCount, (unsigned long)missed, (unsigned long)intervalS, otaFailCount,
            (unsigned long)(millis() - cycleStart));
   Serial.println(payload);
 
@@ -173,13 +235,15 @@ static void runCycle() {
       if (sent) lastPublishedBoot = bootCount;
       Serial.printf("MQTT publish %s\n", sent ? "OK" : "FAILED");
 
-      // The Pi keeps the interval as a retained message, so the broker sends
-      // it straight after subscribing.
+      // The Pi keeps the interval and the OTA offer as retained messages, so
+      // the broker sends both straight after subscribing.
       receivedIntervalS = 0;
+      otaReceived = false;
       mqtt.setCallback(onMqttMessage);
       mqtt.subscribe(MQTT_INTERVAL_TOPIC);
+      mqtt.subscribe(MQTT_OTA_TOPIC);
       uint32_t waitStart = millis();
-      while (!receivedIntervalS && millis() - waitStart < INTERVAL_WAIT_MS) {
+      while ((!receivedIntervalS || !otaReceived) && millis() - waitStart < INTERVAL_WAIT_MS) {
         mqtt.loop();
         delay(10);
       }
@@ -193,6 +257,8 @@ static void runCycle() {
       mqtt.loop();
       delay(50);  // let the TCP stack send before disconnecting
       mqtt.disconnect();
+
+      maybeUpdateFirmware(batteryV);
     } else {
       Serial.printf("MQTT connect FAILED (state %d)\n", mqtt.state());
     }

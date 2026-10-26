@@ -285,6 +285,11 @@ function showLatest(r) {
   if (r.missed) text += ` · ${r.missed} reading(s) missed before this one`;
   if (r.schedule) text += ` · ${r.schedule.mode}: every ${r.schedule.interval} s`;
   if (r.fw) text += ` · firmware ${r.fw}`;
+  if (r.ota_version && r.fw && r.ota_version !== r.fw) {
+    text += r.ota_fail ? ` · update to ${r.ota_version} failed ${r.ota_fail}×`
+                       : ` · update to ${r.ota_version} pending`;
+    if (r.ota_fail) level = Math.max(level, 1);
+  }
   const color = css(["--good", "--warning", "--critical"][level]);
   const icon = level ? "⚠" : "✓";
   status.innerHTML = `<span class="dot" style="background:${color}"></span><span>${icon} ${text}</span>`;

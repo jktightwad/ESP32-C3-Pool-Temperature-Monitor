@@ -34,6 +34,24 @@ bar's `env:` selector):
    With `0` it really deep sleeps and USB drops every cycle, so output is
    mostly unreadable -- use that mode for battery/current tests only.
 
+## Over-the-air (OTA) updates
+
+Once the deployed board runs `monitor` firmware with OTA support (flash it
+over USB once), later updates don't need USB:
+
+1. Test the change over USB on the bench first (`env:monitor`). OTA can't
+   recover firmware that fails to reach WiFi; that needs USB.
+2. Select `env:ota` and click Upload. It builds, then sends the `.bin` to the
+   Pi (`MQTT_HOST`, port 8090, MQTT login from `secrets.h`; set
+   `OTA_WEB_PORT` there if the page isn't on 8090).
+3. The Pi stores it and offers it on `pool/ota`. On its next wake the ESP32
+   downloads it, checks the MD5, installs it in the other app slot and
+   restarts. A failed download leaves the old firmware running.
+
+It only updates with the battery at or above 3.6 V, and stops retrying a
+version after 3 failures (`ota_fail` in the reading). The page shows
+"update to X pending" until the ESP32 reports the new version.
+
 ## Wiring (ESP32-C3 SuperMini)
 
 | GPIO / pin | Use | Notes |

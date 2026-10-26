@@ -1,3 +1,4 @@
 pool.db
 pool.db-*
 __pycache__/
+firmware/
