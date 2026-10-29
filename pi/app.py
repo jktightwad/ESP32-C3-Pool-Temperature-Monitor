@@ -34,8 +34,8 @@ WEB_PORT = int(os.environ.get("WEB_PORT", "8090"))
 STALE_MINUTES = int(os.environ.get("STALE_MINUTES", "30"))
 
 # Battery thresholds for the page's warning (yellow) and low (red) states.
-# Starting guesses: with the 1N5817 in the power path the ESP32 is expected to
-# brown out somewhere around 3.3-3.4 V battery; adjust once real data shows it.
+# Starting guesses: with the MCP1700 LDO feeding 3V3 the ESP32 is expected to
+# brown out somewhere around 3.4-3.5 V battery; adjust once real data shows it.
 BATT_WARN_V = float(os.environ.get("BATT_WARN_V", "3.6"))
 BATT_LOW_V = float(os.environ.get("BATT_LOW_V", "3.45"))
 

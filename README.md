@@ -60,7 +60,7 @@ version after 3 failures (`ota_fail` in the reading). The page shows
 | 7 | 1-Wire bus: pool | Surface, mid, bottom probes; one adapter board's 4.7 kΩ pull-up |
 | 10 | 1-Wire bus: solar | Solar heater outlet probe on its own adapter board (all four on one bus failed) |
 | 3 | Battery voltage | TP4056 OUT+ → 100 kΩ → GPIO3 → 100 kΩ → GND, 100 nF GPIO3–GND |
-| 5V | Power in | TP4056 OUT+ → 1N5817 (stripe toward 5V) → 5V pin |
+| 3V3 | Power in | TP4056 OUT+ → MCP1700-3302E → 3V3 pin (5V pin unused) |
 | GND | Ground | TP4056 OUT−, probes, divider |
 | 5, 6 | Not used | Found no probes on the first board; cause not identified |
 | 8 | Onboard LED | Assumed active-low, not verified; strapping pin |
@@ -70,10 +70,21 @@ Each probe's name (surface / mid / bottom / solar) comes from its ROM address
 offset), so it doesn't matter which bus a probe is on. A new probe shows as
 "unknown" until its address is added there.
 
-Power: 18650 → TP4056 (4-pad, protected) → 1N5817 → SuperMini 5V. Charge via
-the TP4056's USB-C; the diode stops the SuperMini's own USB-C from feeding the
-battery, so firmware can be uploaded with the battery connected. Measure the
-battery on the TP4056 side of the diode. Probe VCC is 3.3 V from GPIO4,
+Power: 18650 → TP4056 (4-pad, protected) → MCP1700-3302E LDO → SuperMini
+**3V3** pin, bypassing the board's own regulator. Capacitors: 1 µF ceramic
+VIN–GND and VOUT–GND (required by the MCP1700 datasheet), 470–1000 µF
+electrolytic on 3V3–GND for WiFi transmit peaks (the MCP1700 is rated
+250 mA). MCP1700 TO-92 pins, flat face toward you, legs down: GND, VIN, VOUT.
+Check VOUT reads ~3.3 V before connecting it to the ESP32.
+
+This replaced a 1N5817 diode into the 5V pin, which browned the ESP32 out
+(reset reason "brownout") once the battery fell below ~3.75 V: the diode drop
+plus the board regulator's dropout left too little headroom. Keep the battery
+connected whenever the SuperMini's USB is plugged in (its regulator also
+drives 3V3). Charge via the TP4056's USB-C; power banks may switch off once
+charging finishes (observed), so a small solar panel with a solar charger
+board is the intended long-term source. The battery divider stays on TP4056
+OUT+. Probe VCC is 3.3 V from GPIO4,
 **never 5 V**: the pull-up puts VCC on the data line, and the C3's GPIOs
 aren't 5 V tolerant. Power-bank style charge/boost modules don't work here:
 they switch their output off when the ESP32 sleeps (tested).
