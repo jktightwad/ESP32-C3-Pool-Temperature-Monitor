@@ -18,7 +18,8 @@
 // the sleep time in effect (set by the Pi via pool/interval). last_fail is
 // why the most recent missed cycle failed: "wifi<status>" (WiFi never
 // connected; Arduino wl_status_t code), "mqtt<state>" (broker connect failed;
-// PubSubClient state code) or "pub" (publish failed); "" if none. probes is
+// PubSubClient state code), "pub" (publish failed) or "hang" (the awake-time
+// limit forced it back to sleep); "" if none. probes is
 // how many devices the scan found on all 1-Wire buses.
 // "uncal" counts probes on the bus that aren't in KNOWN_PROBES (so have no
 // depth or offset). battery_v is read before WiFi starts, so it isn't
@@ -35,6 +36,7 @@
 #include <WiFi.h>
 #include <PubSubClient.h>
 #include <HTTPUpdate.h>
+#include <esp_timer.h>
 #include "secrets.h"
 #include "probes.h"
 
@@ -84,6 +86,36 @@ static bool otaReceived = false;
 RTC_DATA_ATTR char otaFailedVersion[48] = "";
 RTC_DATA_ATTR uint8_t otaFailCount = 0;
 
+// Awake-time limit. A wake normally takes 2-3 s; if one is still awake after
+// AWAKE_LIMIT_MS (e.g. hung in WiFi/MQTT), the timer records "hang" in
+// lastFail and forces deep sleep, so the board recovers on its own at the
+// next wake instead of staying awake (and silent) until power-cycled.
+static const uint32_t AWAKE_LIMIT_MS     = 90000;
+static const uint32_t OTA_AWAKE_LIMIT_MS = 300000;  // firmware download
+static esp_timer_handle_t awakeTimer = nullptr;
+
+static void onAwakeTimeout(void *) {
+  strcpy(lastFail, "hang");
+#if DEBUG_NO_DEEP_SLEEP
+  esp_restart();
+#else
+  esp_sleep_enable_timer_wakeup((uint64_t)intervalS * 1000000ULL);
+  esp_deep_sleep_start();
+#endif
+}
+
+// (Re)starts the awake-time limit from now.
+static void startAwakeLimit(uint32_t ms) {
+  if (!awakeTimer) {
+    esp_timer_create_args_t args = {};
+    args.callback = &onAwakeTimeout;
+    args.name = "awake_limit";
+    esp_timer_create(&args, &awakeTimer);
+  }
+  esp_timer_stop(awakeTimer);  // harmless if not running
+  esp_timer_start_once(awakeTimer, (uint64_t)ms * 1000ULL);
+}
+
 static void onMqttMessage(char *topic, byte *payload, unsigned int len) {
   if (strcmp(topic, MQTT_OTA_TOPIC) == 0) {
     len = len < sizeof(otaOffer) - 1 ? len : sizeof(otaOffer) - 1;
@@ -120,6 +152,7 @@ static void maybeUpdateFirmware(float batteryV) {
   }
 
   Serial.printf("OTA: updating %s -> %s from %s\n", FW_VERSION, version, url);
+  startAwakeLimit(OTA_AWAKE_LIMIT_MS);
   WiFiClient client;
   httpUpdate.rebootOnUpdate(false);
   t_httpUpdate_return result = httpUpdate.update(client, url);
@@ -192,6 +225,7 @@ static size_t appendTemp(char *buf, size_t len, size_t pos, const char *key, flo
 }
 
 static void runCycle() {
+  startAwakeLimit(AWAKE_LIMIT_MS);
   uint32_t cycleStart = millis();
   bootCount++;
   Serial.printf("\nCycle %lu, firmware %s\n", (unsigned long)bootCount, FW_VERSION);
@@ -295,6 +329,7 @@ void setup() {
 
 #if !DEBUG_NO_DEEP_SLEEP
   runCycle();
+  esp_timer_stop(awakeTimer);
   Serial.flush();
   esp_sleep_enable_timer_wakeup((uint64_t)intervalS * 1000000ULL);
   esp_deep_sleep_start();
@@ -304,6 +339,7 @@ void setup() {
 void loop() {
   // Only reached with DEBUG_NO_DEEP_SLEEP; otherwise setup() ends in deep sleep.
   runCycle();
+  esp_timer_stop(awakeTimer);
   Serial.printf("Waiting %lu s\n", (unsigned long)intervalS);
   delay(intervalS * 1000UL);
 }
