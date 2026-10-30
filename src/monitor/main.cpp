@@ -75,7 +75,9 @@ RTC_DATA_ATTR uint32_t lastPublishedBoot = 0;
 // Why the most recent failed cycle didn't publish ("wifi<status>",
 // "mqtt<state>" or "pub"); reported in the next successful reading, then
 // cleared. Empty = no failure since the last report.
-RTC_DATA_ATTR char lastFail[16] = "";
+// RTC_NOINIT (like the stage breadcrumb below) so it also survives a reset-
+// button restart; cleared in setup() after a power loss (invalid magic).
+RTC_NOINIT_ATTR char lastFail[16];
 // Current interval; kept across deep sleep, updated from the Pi.
 RTC_DATA_ATTR uint32_t intervalS = REPORT_INTERVAL_S;
 static uint32_t receivedIntervalS = 0;
@@ -354,11 +356,23 @@ static void runCycle() {
 }
 
 void setup() {
-  prevStage = (stageMagic == STAGE_MAGIC) ? stage : 0;
+  bool rtcValid = (stageMagic == STAGE_MAGIC);
+  prevStage = rtcValid ? stage : 0;
+  if (!rtcValid) lastFail[0] = '\0';  // power loss: no-init memory is garbage
+  lastFail[sizeof(lastFail) - 1] = '\0';
   setStage(STAGE_BOOT);
   Serial.begin(115200);
 #if DEBUG_NO_DEEP_SLEEP
   delay(3000);  // time to open the serial monitor
+#else
+  // After a reset (not a normal wake), wait briefly for a USB serial monitor
+  // so the whole attempt can be watched. Normal wakes don't wait.
+  if (esp_reset_reason() != ESP_RST_DEEPSLEEP) {
+    uint32_t start = millis();
+    while (!Serial && millis() - start < 5000) delay(10);
+    Serial.printf("Started (reset: %s, previous stage: %s, last fail: %s)\n",
+                  resetReason(), stageName(prevStage), lastFail[0] ? lastFail : "none");
+  }
 #endif
   pinMode(PROBE_POWER_PIN, OUTPUT);
 
