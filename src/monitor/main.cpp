@@ -86,6 +86,34 @@ static bool otaReceived = false;
 RTC_DATA_ATTR char otaFailedVersion[48] = "";
 RTC_DATA_ATTR uint8_t otaFailCount = 0;
 
+// Stage breadcrumb, in RTC memory that isn't cleared on startup
+// (RTC_NOINIT_ATTR: survives software resets per Espressif's docs; lost on
+// power loss). After a restart that isn't a normal wake, prev_stage in the
+// payload says where the previous run stopped, e.g. "sleep" = it went to deep
+// sleep and never woke from it.
+enum : uint8_t { STAGE_BOOT = 1, STAGE_PROBES, STAGE_WIFI, STAGE_MQTT, STAGE_OTA, STAGE_SLEEP };
+static const uint32_t STAGE_MAGIC = 0x504F4F4C;  // "POOL": marks valid data
+RTC_NOINIT_ATTR uint32_t stageMagic;
+RTC_NOINIT_ATTR uint8_t stage;
+static uint8_t prevStage = 0;
+
+static void setStage(uint8_t s) {
+  stageMagic = STAGE_MAGIC;
+  stage = s;
+}
+
+static const char *stageName(uint8_t s) {
+  switch (s) {
+    case STAGE_BOOT:   return "boot";
+    case STAGE_PROBES: return "probes";
+    case STAGE_WIFI:   return "wifi";
+    case STAGE_MQTT:   return "mqtt";
+    case STAGE_OTA:    return "ota";
+    case STAGE_SLEEP:  return "sleep";
+    default:           return "unknown";
+  }
+}
+
 // Awake-time limit. A wake normally takes 2-3 s; if one is still awake after
 // AWAKE_LIMIT_MS (e.g. hung in WiFi/MQTT), the timer records "hang" in
 // lastFail and forces deep sleep, so the board recovers on its own at the
@@ -99,6 +127,7 @@ static void onAwakeTimeout(void *) {
 #if DEBUG_NO_DEEP_SLEEP
   esp_restart();
 #else
+  setStage(STAGE_SLEEP);
   esp_sleep_enable_timer_wakeup((uint64_t)intervalS * 1000000ULL);
   esp_deep_sleep_start();
 #endif
@@ -153,6 +182,7 @@ static void maybeUpdateFirmware(float batteryV) {
 
   Serial.printf("OTA: updating %s -> %s from %s\n", FW_VERSION, version, url);
   startAwakeLimit(OTA_AWAKE_LIMIT_MS);
+  setStage(STAGE_OTA);
   WiFiClient client;
   httpUpdate.rebootOnUpdate(false);
   t_httpUpdate_return result = httpUpdate.update(client, url);
@@ -226,6 +256,7 @@ static size_t appendTemp(char *buf, size_t len, size_t pos, const char *key, flo
 
 static void runCycle() {
   startAwakeLimit(AWAKE_LIMIT_MS);
+  setStage(STAGE_PROBES);
   uint32_t cycleStart = millis();
   bootCount++;
   Serial.printf("\nCycle %lu, firmware %s\n", (unsigned long)bootCount, FW_VERSION);
@@ -241,6 +272,7 @@ static void runCycle() {
   uint32_t convStart = millis();
 
   // WiFi connects while the probes convert
+  setStage(STAGE_WIFI);
   bool wifiOk = connectWiFi();
 
   while (millis() - convStart < PROBE_CONVERSION_MS) delay(5);
@@ -260,10 +292,10 @@ static void runCycle() {
   char bssid[24] = "null";
   if (wifiOk) snprintf(bssid, sizeof(bssid), "\"%s\"", WiFi.BSSIDstr().c_str());
   snprintf(payload + pos, sizeof(payload) - pos,
-           ",\"uncal\":%u,\"battery_v\":%.2f,\"rssi\":%d,\"bssid\":%s,\"reset\":\"%s\",\"fw\":\"%s\","
+           ",\"uncal\":%u,\"battery_v\":%.2f,\"rssi\":%d,\"bssid\":%s,\"reset\":\"%s\",\"prev_stage\":\"%s\",\"fw\":\"%s\","
            "\"boot\":%lu,\"missed\":%lu,\"last_fail\":\"%s\",\"probes\":%u,\"interval\":%lu,"
            "\"ota_fail\":%u,\"awake_ms\":%lu}",
-           unknownProbes, batteryV, wifiOk ? WiFi.RSSI() : 0, bssid, resetReason(), FW_VERSION,
+           unknownProbes, batteryV, wifiOk ? WiFi.RSSI() : 0, bssid, resetReason(), stageName(prevStage), FW_VERSION,
            (unsigned long)bootCount, (unsigned long)missed, lastFail, probesFound,
            (unsigned long)intervalS, otaFailCount,
            (unsigned long)(millis() - cycleStart));
@@ -274,6 +306,7 @@ static void runCycle() {
     // Default 256-byte packet limit is close to the worst-case payload (~234
     // bytes with 4 probes); publish() fails silently past it.
     mqtt.setBufferSize(512);
+    setStage(STAGE_MQTT);
     if (mqtt.connect(MQTT_CLIENT_ID, MQTT_USER, MQTT_PASSWORD)) {
       bool sent = mqtt.publish(MQTT_TOPIC, payload, true);  // retained
       if (sent) {
@@ -321,6 +354,8 @@ static void runCycle() {
 }
 
 void setup() {
+  prevStage = (stageMagic == STAGE_MAGIC) ? stage : 0;
+  setStage(STAGE_BOOT);
   Serial.begin(115200);
 #if DEBUG_NO_DEEP_SLEEP
   delay(3000);  // time to open the serial monitor
@@ -331,6 +366,7 @@ void setup() {
   runCycle();
   esp_timer_stop(awakeTimer);
   Serial.flush();
+  setStage(STAGE_SLEEP);
   esp_sleep_enable_timer_wakeup((uint64_t)intervalS * 1000000ULL);
   esp_deep_sleep_start();
 #endif
